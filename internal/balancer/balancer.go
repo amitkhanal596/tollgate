@@ -14,14 +14,14 @@
 // other internal package (docs/architecture.md).
 //
 // Constructors (NewRoundRobin in roundrobin.go since Phase 1; NewLeastConn
-// planned for Phase 2). Both take an injected clock so tests can
+// in leastconn.go since Phase 2). Both take an injected clock so tests can
 // control passive-ejection expiry without sleeping:
 //
 //	func NewRoundRobin(backends []*Backend, now func() time.Time) Balancer
 //	func NewLeastConn(backends []*Backend, now func() time.Time) Balancer
 //
-// The backends slice passed to a constructor is owned by the Balancer and
-// must not be modified afterwards.
+// Both constructors copy the backends slice, so the caller may reuse it;
+// the *Backend values themselves are shared on purpose.
 package balancer
 
 import (
@@ -71,6 +71,9 @@ var ErrNoHealthyBackends = errors.New("balancer: no healthy backends")
 //	func (b *Backend) RecordFailure() int32
 //	func (b *Backend) RecordSuccess()
 //	func (b *Backend) EjectUntil(t time.Time)
+//	// TryEject ejects until `until` only if not already ejected at now;
+//	// exactly one of several concurrent callers gets true (Phase 2).
+//	func (b *Backend) TryEject(now, until time.Time) bool
 //	func (b *Backend) EjectedUntil() time.Time // zero Time if never ejected
 type Backend struct {
 	// ID uniquely identifies the backend process-wide. Format:

@@ -46,18 +46,25 @@ func (r *Registry) Get(upstream string, u *url.URL) *Backend {
 	return b
 }
 
-// Prune drops every Backend whose ID is not in keep (a nil keep drops all).
+// Prune drops every Backend whose ID is not in keep (a nil keep drops all)
+// and returns the dropped Backends (nil if none), in no particular order,
+// so the caller can clean up per-backend resources such as metric series
+// (docs/architecture.md §11 row 19). Callers that do not need them may
+// ignore the result.
+//
 // Requests still holding a dropped *Backend keep using it safely; a later
 // Get for that ID creates a fresh Backend with reset state.
-func (r *Registry) Prune(keep map[string]struct{}) {
+func (r *Registry) Prune(keep map[string]struct{}) (removed []*Backend) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for id := range r.backends {
+	for id, b := range r.backends {
 		if _, ok := keep[id]; !ok {
+			removed = append(removed, b)
 			// Deleting during range is explicitly allowed by the Go spec.
 			delete(r.backends, id)
 		}
 	}
+	return removed
 }
 
 // Len returns the number of Backends currently registered.

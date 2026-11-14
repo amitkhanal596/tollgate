@@ -74,6 +74,27 @@ func (b *Backend) EjectUntil(t time.Time) {
 	b.ejectedUntilUnixNano.Store(t.UnixNano())
 }
 
+// TryEject ejects the backend until `until` only if it is not already
+// ejected at now, and reports whether this call performed the ejection.
+// Of several concurrent callers exactly one wins, so a burst of failures
+// produces one ejection (one log line, one metric increment) and requests
+// that fail while the backend is already ejected do not extend the cooloff.
+// until must not be the zero Time.
+func (b *Backend) TryEject(now, until time.Time) bool {
+	nowNs, untilNs := now.UnixNano(), until.UnixNano()
+	for {
+		old := b.ejectedUntilUnixNano.Load()
+		if nowNs < old {
+			return false // still ejected; someone else already did it
+		}
+		// CAS rather than Store: another caller may have ejected between
+		// our Load and here, and only one of us may report the ejection.
+		if b.ejectedUntilUnixNano.CompareAndSwap(old, untilNs) {
+			return true
+		}
+	}
+}
+
 // EjectedUntil returns the passive-ejection deadline, or the zero Time if
 // the backend was never ejected (or the ejection was cleared).
 func (b *Backend) EjectedUntil() time.Time {
