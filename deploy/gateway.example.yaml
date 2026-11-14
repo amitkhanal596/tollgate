@@ -1,0 +1,47 @@
+# Example Tollgate gateway config (standalone mode).
+#
+#   go run ./cmd/gateway -config deploy/gateway.example.yaml
+#
+# The gateway re-reads this file when its content changes (-config-poll,
+# default 2s) and hot-swaps the new config without dropping requests. An
+# invalid edit is logged and ignored; the last good config keeps serving.
+
+# version: omitted, so the gateway numbers each reload itself. Set it (> 0)
+# if you want a specific version to show up in logs.
+
+defaults:
+  # Used by every route that does not set its own value. Anything left out
+  # falls back to the built-in defaults (dial 2s, response_header 10s,
+  # request 30s).
+  timeouts:
+    dial: 1s             # TCP (and TLS) connect to a backend
+    response_header: 5s  # wait for the backend's response headers
+    request: 30s         # whole exchange, including streaming the body
+
+routes:
+  # Matching: exact-host routes first, then any-host routes; within those
+  # the longest path prefix wins, on segment boundaries ("/api/users"
+  # matches "/api/users/42" but not "/api/usersx"). Paths are forwarded
+  # unchanged.
+  - name: users-api
+    host: api.localhost       # only requests with this Host header
+    path_prefix: /api/users
+    upstream: users
+    timeouts:
+      request: 5s             # tighter than the default for this API
+
+  - name: web
+    # no host: matches any host
+    path_prefix: /
+    upstream: web
+
+upstreams:
+  - name: users
+    algorithm: round_robin    # least_conn arrives in Phase 2
+    backends:
+      - http://127.0.0.1:9001
+      - http://127.0.0.1:9002
+
+  - name: web
+    backends:
+      - http://127.0.0.1:9003
