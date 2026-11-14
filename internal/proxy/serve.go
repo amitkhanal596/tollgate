@@ -11,19 +11,42 @@ import (
 	"time"
 )
 
-// Server-side limits for client connections.
+// Server-side limits for client connections (docs/architecture.md section
+// 4, "Listener and transport limits").
 const (
 	// readHeaderTimeout stops slowloris clients from holding a connection
 	// (and a goroutine) open by trickling request headers.
-	readHeaderTimeout = 10 * time.Second
-	// idleTimeout closes keep-alive connections that sit unused.
+	readHeaderTimeout = 5 * time.Second
+	// idleTimeout closes keep-alive connections that sit unused. It is
+	// longer than the usual 60 s idle timeout of a fronting load balancer,
+	// so the LB closes first and never reuses a connection we just closed.
 	idleTimeout = 120 * time.Second
-	// There is deliberately no ReadTimeout or WriteTimeout: they would cap
-	// large uploads and streamed responses. Per-route request timeouts
-	// bound proxied exchanges instead.
+	// maxHeaderBytes bounds the memory one request's headers can take
+	// (header-flood protection); larger requests get 431.
+	maxHeaderBytes = 1 << 20
 )
 
-// Serve serves handler on ln until ctx is canceled, then shuts down
+// NewServer returns the traffic http.Server with the documented limits:
+// ReadHeaderTimeout 5 s, IdleTimeout 120 s, MaxHeaderBytes 1 MiB.
+//
+// There is deliberately no ReadTimeout or WriteTimeout: they are absolute
+// deadlines on the whole connection exchange, so they would kill streamed
+// responses (SSE, long polls) and slow uploads mid-flight. The per-route
+// request timeout bounds each proxied exchange instead.
+func NewServer(handler http.Handler) *http.Server {
+	return &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: readHeaderTimeout,
+		IdleTimeout:       idleTimeout,
+		MaxHeaderBytes:    maxHeaderBytes,
+		// BaseContext is left at its default (Background) on purpose:
+		// deriving request contexts from a shutdown context would cancel
+		// every in-flight request the moment shutdown starts, defeating
+		// the drain.
+	}
+}
+
+// Serve serves handler on ln, using NewServer's limits, until ctx is canceled, then shuts down
 // gracefully: the listener is closed at once (new connections are refused),
 // idle connections are closed, and in-flight requests get up to drain to
 // finish.
@@ -37,15 +60,8 @@ func Serve(ctx context.Context, ln net.Listener, handler http.Handler, drain tim
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	srv := &http.Server{
-		Handler:           handler,
-		ReadHeaderTimeout: readHeaderTimeout,
-		IdleTimeout:       idleTimeout,
-		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
-		// BaseContext is left at its default (Background) on purpose:
-		// deriving request contexts from ctx would cancel every in-flight
-		// request the moment shutdown starts, defeating the drain.
-	}
+	srv := NewServer(handler)
+	srv.ErrorLog = slog.NewLogLogger(logger.Handler(), slog.LevelWarn)
 
 	// Buffered so the goroutine can always deliver its result and exit,
 	// whichever branch below we take.
@@ -69,6 +85,11 @@ func Serve(ctx context.Context, ln net.Listener, handler http.Handler, drain tim
 		// Drain deadline passed with requests still running. Close forces
 		// their connections shut, which also cancels their request
 		// contexts, so the gateway's upstream calls are aborted too.
+		//
+		// We deliberately do NOT wait for those handlers to return: the
+		// process is exiting, and waiting on handlers that already
+		// outlived the deadline would defeat the deadline (and could hang
+		// shutdown forever on a handler that ignores its context).
 		_ = srv.Close()
 	}
 	// Shutdown closes the listener first, so Serve has returned (or is

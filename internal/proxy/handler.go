@@ -20,8 +20,18 @@ import (
 // and back to the client.
 const HeaderRequestID = "X-Request-ID"
 
+// HeaderClientID tells the upstream which authenticated client made the
+// request. The gateway ALWAYS removes any inbound copy (every route, every
+// spelling), so an upstream can trust it: it is only ever set by the
+// gateway, and only from an authenticated Identity (Phase 3), never from
+// the client IP (docs/architecture.md section 11 row 12).
+const HeaderClientID = "X-Tollgate-Client-ID"
+
 // statusClientClosedRequest is nginx's non-standard code for "the client
-// went away before we answered". It is only ever logged, never written.
+// went away before we answered". It is logged, and also written: if nothing
+// were written, net/http would finish the response with an implicit
+// "200 OK", which a half-closed client (or an access log in front of us)
+// would see as success.
 const statusClientClosedRequest = 499
 
 // maxRequestIDLen bounds a client-supplied request ID so it cannot bloat
@@ -30,26 +40,32 @@ const maxRequestIDLen = 128
 
 // ServeHTTP is the data-plane request path (docs/architecture.md section 4).
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// The ID is put on the response by writeError and ModifyResponse, not
+	// here: ReverseProxy clears the response header map after relaying a
+	// 1xx (e.g. 103 Early Hints), which would silently drop an early Set.
 	reqID := requestID(r.Header.Get(HeaderRequestID))
-	// Set on the response before anything else so every outcome, including
-	// gateway-generated errors, carries the ID.
-	w.Header().Set(HeaderRequestID, reqID)
 
 	// One atomic load; this request uses this snapshot until it finishes,
 	// even if a reload swaps in a newer one meanwhile (ADR 0002).
 	s := g.snap.Load()
 	if s == nil {
-		writeError(w, http.StatusServiceUnavailable)
+		writeError(w, http.StatusServiceUnavailable, reqID)
 		return
 	}
 
-	if hasDotSegment(r.URL.Path) {
-		writeError(w, http.StatusBadRequest)
+	// Before routing: the router must only ever see paths that every
+	// upstream will interpret the same way (see checkPath).
+	if err := checkPath(r.URL); err != nil {
+		g.logger.Info("unsafe request path rejected", "request_id", reqID, "err", err)
+		writeError(w, http.StatusBadRequest, reqID)
 		return
 	}
+	// r.URL.Path is exactly what is forwarded (rewrite joins it onto the
+	// backend URL via EscapedPath, which checkPath has verified encodes the
+	// same segments), so the route we pick is the one the upstream serves.
 	route := s.router.Match(r.Host, r.URL.Path)
 	if route == nil {
-		writeError(w, http.StatusNotFound)
+		writeError(w, http.StatusNotFound, reqID)
 		return
 	}
 
@@ -60,7 +76,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// clients the condition is temporary.
 		g.logger.Warn("no healthy backend",
 			"request_id", reqID, "route", route.name, "upstream", route.upstream.name, "err", err)
-		writeError(w, http.StatusServiceUnavailable)
+		writeError(w, http.StatusServiceUnavailable, reqID)
 		return
 	}
 	// Done runs after the response body has been fully copied (or the
@@ -111,11 +127,17 @@ func newRouteProxy(route string, transport http.RoundTripper, buffers *bufferPoo
 		// the extra flushes cost little.
 		FlushInterval: -1,
 		BufferPool:    buffers,
-		// The client gets our ID; drop any the upstream sent so the
-		// response carries exactly one. (Phase 2 passive health hooks in
-		// here as well.)
+		// The client gets our ID, replacing any the upstream sent, so the
+		// response carries exactly one. It is set here rather than on the
+		// ResponseWriter up front because ReverseProxy copies these headers
+		// after any 1xx, and clears the writer's header map after each 1xx.
+		// (Phase 2 passive health hooks in here as well.)
 		ModifyResponse: func(resp *http.Response) error {
-			resp.Header.Del(HeaderRequestID)
+			if st := stateFrom(resp.Request.Context()); st != nil {
+				resp.Header.Set(HeaderRequestID, st.requestID)
+			} else {
+				resp.Header.Del(HeaderRequestID)
+			}
 			return nil
 		},
 		ErrorHandler: errorHandler(route, logger),
@@ -148,6 +170,23 @@ func rewrite(pr *httputil.ProxyRequest) {
 	}
 	pr.SetXForwarded()
 	pr.Out.Header.Set(HeaderRequestID, st.requestID)
+	// Anti-spoofing: the client must never be able to choose the identity
+	// an upstream sees. Done on the outbound copy (handlers should not
+	// mutate the inbound request), which is the last stop before the wire.
+	stripHeader(pr.Out.Header, HeaderClientID)
+}
+
+// stripHeader removes every entry for name. Header.Del only removes the
+// canonical key, but a header map built in code (not parsed off the wire)
+// can hold non-canonical keys such as "x-tollgate-client-id", and the
+// transport writes those out verbatim.
+func stripHeader(h http.Header, name string) {
+	h.Del(name)
+	for k := range h {
+		if strings.EqualFold(k, name) {
+			delete(h, k) // deleting during range is safe in Go
+		}
+	}
 }
 
 // errorHandler maps transport failures to a status (docs/architecture.md
@@ -162,14 +201,21 @@ func errorHandler(route string, logger *slog.Logger) func(http.ResponseWriter, *
 			// The backend address is fine in logs; it never goes in a body.
 			attrs = append(attrs, "request_id", st.requestID, "backend", st.backend.ID)
 		}
+		var reqID string
+		if st := stateFrom(r.Context()); st != nil {
+			reqID = st.requestID
+		}
 		if status == statusClientClosedRequest {
-			// Nobody is listening, so write nothing. This is the client's
-			// choice, not a gateway or backend fault: log at Info.
+			// The client's choice, not a gateway or backend fault: log at
+			// Info. Never reported to passive health (section 11 row 11).
+			// We still write 499 so net/http does not send its implicit
+			// 200 to a half-closed client; the write may simply fail.
 			logger.Info("client canceled request", attrs...)
+			writeError(w, status, reqID)
 			return
 		}
 		logger.Warn("upstream request failed", attrs...)
-		writeError(w, status)
+		writeError(w, status, reqID)
 	}
 }
 
@@ -200,19 +246,32 @@ func classifyProxyError(ctx context.Context, err error) int {
 	return http.StatusBadGateway
 }
 
-// writeError writes a small, generic error. Bodies never include backend
-// addresses or error details; those go to the logs, joined by request ID.
-func writeError(w http.ResponseWriter, status int) {
+// writeError writes a small, generic error carrying the request ID. Bodies
+// never include backend addresses or error details; those go to the logs,
+// joined by request ID.
+func writeError(w http.ResponseWriter, status int, reqID string) {
 	h := w.Header()
 	h.Set("Content-Type", "text/plain; charset=utf-8")
 	h.Set("X-Content-Type-Options", "nosniff")
+	if reqID != "" {
+		h.Set(HeaderRequestID, reqID)
+	}
 	w.WriteHeader(status)
-	_, _ = w.Write([]byte(http.StatusText(status) + "\n"))
+	_, _ = w.Write([]byte(statusText(status) + "\n"))
+}
+
+// statusText is http.StatusText plus the non-standard 499.
+func statusText(status int) string {
+	if status == statusClientClosedRequest {
+		return "Client Closed Request"
+	}
+	return http.StatusText(status)
 }
 
 // requestID returns the client's ID if it is safe to propagate, otherwise a
-// fresh random one. "Safe" means short and visible ASCII only, so a hostile
-// value cannot inject header or log content.
+// fresh random one. "Safe" means at most 128 bytes of letters, digits and
+// "-_.:" (enough for UUIDs, hex, ULIDs and trace IDs), so a hostile value
+// cannot inject header, log or HTML content or smuggle list separators.
 func requestID(in string) string {
 	if validRequestID(in) {
 		return in
@@ -230,7 +289,11 @@ func validRequestID(s string) bool {
 		return false
 	}
 	for i := 0; i < len(s); i++ {
-		if c := s[i]; c < 0x21 || c > 0x7e {
+		c := s[i]
+		switch {
+		case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9':
+		case c == '-', c == '_', c == '.', c == ':':
+		default:
 			return false
 		}
 	}

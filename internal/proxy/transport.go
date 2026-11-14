@@ -7,13 +7,14 @@ import (
 	"time"
 )
 
-// Upstream connection-pool sizing. MaxIdleConnsPerHost matters most: the
-// net/http default of 2 makes a busy proxy open and close a TCP connection
-// for almost every request, which costs latency and can exhaust ephemeral
-// ports through TIME_WAIT.
+// Upstream connection-pool sizing, per pooled transport. MaxIdleConnsPerHost
+// matters most: the net/http default of 2 makes a busy proxy open and close
+// a TCP connection for almost every request, which costs latency and can
+// exhaust ephemeral ports through TIME_WAIT. IdleConnTimeout (90 s) bounds how
+// long an unused warm connection (and its goroutines) is kept.
 const (
 	upstreamMaxIdleConns        = 1024
-	upstreamMaxIdleConnsPerHost = 128
+	upstreamMaxIdleConnsPerHost = 64
 	upstreamIdleConnTimeout     = 90 * time.Second
 	upstreamTCPKeepAlive        = 30 * time.Second
 	upstreamExpectContinue      = 1 * time.Second

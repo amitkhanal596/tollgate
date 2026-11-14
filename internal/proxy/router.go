@@ -105,25 +105,3 @@ func normalizeConfigHost(host string) string {
 	}
 	return strings.ToLower(host)
 }
-
-// hasDotSegment reports whether a decoded path contains a "." or ".."
-// segment. Such paths are rejected because the router would match the raw
-// prefix ("/public/../admin" fits "/public") while the backend may resolve
-// the dot segments to a different resource, letting a client bypass the
-// per-route policy of the route the backend actually serves. Well-behaved
-// clients remove dot segments before sending (RFC 3986 section 5.2.4).
-func hasDotSegment(path string) bool {
-	for len(path) > 0 {
-		i := strings.IndexByte(path, '/')
-		seg := path
-		if i >= 0 {
-			seg, path = path[:i], path[i+1:]
-		} else {
-			path = ""
-		}
-		if seg == "." || seg == ".." {
-			return true
-		}
-	}
-	return false
-}
