@@ -13,7 +13,8 @@
 // Dependency rule: this package imports only the standard library and no
 // other internal package (docs/architecture.md).
 //
-// Planned constructors (Phase 2). Both take an injected clock so tests can
+// Constructors (NewRoundRobin in roundrobin.go since Phase 1; NewLeastConn
+// planned for Phase 2). Both take an injected clock so tests can
 // control passive-ejection expiry without sleeping:
 //
 //	func NewRoundRobin(backends []*Backend, now func() time.Time) Balancer
@@ -42,7 +43,7 @@ var ErrNoHealthyBackends = errors.New("balancer: no healthy backends")
 // fields are atomics so none of those readers or writers take a lock.
 //
 // Identity and lifetime: Backends are created and handed out by a
-// long-lived Registry (Phase 2) keyed by ID. When a new config snapshot is
+// long-lived Registry (registry.go) keyed by ID. When a new config snapshot is
 // built, the builder asks the Registry for each backend by ID and gets the
 // SAME pointer back if that backend already existed. That is how health,
 // ejection and in-flight counts survive a config swap (ADR 0002). Backends
@@ -53,8 +54,8 @@ var ErrNoHealthyBackends = errors.New("balancer: no healthy backends")
 // Never copy a Backend by value (it contains atomics; go vet's copylocks
 // check flags this). Always use *Backend.
 //
-// Method set to be implemented in Phase 2 (signatures are the contract the
-// tests will be written against):
+// Method set (implemented in backend.go; these signatures are the contract
+// the tests are written against):
 //
 //	func NewBackend(id string, u *url.URL) *Backend
 //	// Available reports !activeDown && now >= ejectedUntil. Ejection expires
