@@ -23,7 +23,7 @@ The gateway never calls the control plane on the request path, and it keeps serv
 | `internal/discovery` | Consul blocking-query watcher producing healthy endpoint sets. | `Resolver`, `Query`, `Endpoint` (0); `Consul` (5) |
 | `internal/metrics` | Prometheus collectors registered on an **injected** `*prometheus.Registry` (never the global default registry, per "no global mutable state"). | `Metrics` (6) |
 | `internal/proxy` | Composes everything: `Snapshot` and its builder, router, the HTTP handler (request path), transport pool, the `Gateway` reconcile loop that owns the `atomic.Pointer[Snapshot]`. | `Gateway`, `Snapshot` (1; grows in 2–6) |
-| `internal/controlplane` *(proposed, see open questions)* | Admin API handlers, Postgres store, SSE hub and stream handler. | `Store`, `Hub`, `API` (4) |
+| `internal/controlplane` (added at the Phase 0 checkpoint) | Admin API handlers, versioned config store (Postgres + in-memory), migrations, SSE hub, data-plane registry and stream handler (§6, ADR 0008). | `Store`, `Hub`, `Nodes`, `Options`, `NewHandler`, `Migrate`, `PostgresStore`, `MemStore` (4) |
 
 Planned Phase 2 health API (sketch, to be pinned down by test-writer):
 
@@ -175,7 +175,7 @@ Hub.Publish(cfg vN) ── ignored if N <= max published; fan-out into a capacit
   │  stream handler: Subscribe FIRST, then read head; send head if > since;
   │                  then forward only versions > last sent
   │
-  ▼  SSE: id: N / event: config / data: {json}       (heartbeat every 15 s; Bearer data-plane token)
+  ▼  SSE: id: N / event: config / data: {json}       (heartbeat every 15 s, configurable; Bearer data-plane token)
 gateway config.RemoteSource ── drop if N <= highest delivered → strict decode → Normalize+Validate
   │                               → send on capacity-1 latest-wins channel   (NO disk write here)
   ▼
@@ -186,8 +186,9 @@ proxy.Gateway reconcile loop (single goroutine, the only writer)
   │     authenticators; limits; transports)       build error → keep old, count failure,
   │                                                 src.(config.Acknowledger).Rejected(N, err)
   │  3. snap.Store(new)                            ← atomic swap; in-flight requests finish on old
-  │  4. src.(config.Acknowledger).Applied(N)       → RemoteSource writes LKG file, since = N,
-  │                                                  async POST /v1/dataplanes/{node}/status
+  │  4. src.(config.Acknowledger).Applied(N)       → RemoteSource: since = N (in memory, O(1));
+  │                                                  its worker goroutine then writes the LKG file
+  │                                                  and POSTs /v1/dataplanes/{node}/status
   │  5. removed := Registry.Prune(keep); metrics.ForgetBackend for each removed;
   │     Checker.Sync(targets); close+drop unreferenced transports; metrics config_version = N
   ▼
@@ -198,39 +199,211 @@ The Acknowledger calls happen only for builds triggered by a **new config**. Reb
 
 Discovery watches feed the same loop. Each watch has a small forwarding goroutine that sends `(service key, generation, endpoints)` into one channel the loop selects on. **Every send selects on the watch's `ctx.Done()`**, so a canceled watch never blocks the loop. The loop drops updates whose generation is not the current generation for that key, and it de-duplicates endpoints by `Address` before building backends (ADR 0007). The goroutine exits when its watch channel closes or its ctx is done.
 
-## 6. Control plane (Phase 4 outline)
+### 5.1 `config.RemoteSource` (Phase 4, binding for test-writer and core-builder)
+
+```go
+// internal/config/remotesource.go
+type RemoteOptions struct {
+    BaseURL       string        // required: absolute http(s) URL of the control plane, e.g. "http://controlplane:9000"; no path other than "/", no query or fragment
+    Token         string        // required: TOLLGATE_DATAPLANE_TOKEN, sent as "Authorization: Bearer <Token>"
+    NodeID        string        // required: 1..128 bytes of [A-Za-z0-9._-], first byte a letter or digit
+    LKGPath       string        // optional: "" disables the last-known-good file
+    BackoffMin    time.Duration // default 500ms
+    BackoffMax    time.Duration // default 30s
+    IdleTimeout   time.Duration // default 45s: reconnect if no byte arrives for this long (3 heartbeats)
+    MaxEventBytes int           // default 8 MiB: cap on one line and on one event's accumulated data
+    StatusTimeout time.Duration // default 5s: per status POST
+    HTTPClient    *http.Client  // default &http.Client{}; its Timeout MUST be 0 (a client timeout would kill the stream)
+    Logger        *slog.Logger  // nil discards
+    Sleep func(ctx context.Context, d time.Duration) error // backoff wait; default: timer or ctx.Done, returns ctx.Err()
+    Rand  func() float64                                   // jitter source in [0,1); default math/rand/v2.Float64
+}
+func NewRemoteSource(opts RemoteOptions) (*RemoteSource, error)
+func (s *RemoteSource) Watch(ctx context.Context) (<-chan *Config, error) // ConfigSource
+func (s *RemoteSource) Applied(version int64)                            // Acknowledger (ack.go)
+func (s *RemoteSource) Rejected(version int64, err error)                // Acknowledger
+func (s *RemoteSource) Connected() bool // true while a stream is open and has delivered a frame; feeds tollgate_config_stream_connected (Phase 6)
+```
+
+The clock is injected as `Sleep` (all waiting in the source is backoff) plus `Rand`. A test passes a `Sleep` that records `d` and returns `nil` immediately, so it can assert the exact backoff sequence and its reset without waiting. The idle timeout uses real time; tests set it to milliseconds.
+
+`NewRemoteSource` returns an error (and nothing starts) if `BaseURL` does not parse as an absolute `http`/`https` URL with a host, has a query or fragment, or has a path other than `""`/`"/"`; if `Token` is empty; if `NodeID` is invalid; if `HTTPClient.Timeout != 0`; or if `BackoffMin > BackoffMax` after defaulting. Zero or negative durations and sizes take the defaults.
+
+**State** (one mutex): `delivered` (highest version sent on the channel, the high-water mark, starts 0), `cursor` (highest **applied** version, sent as `since`, starts 0), `pending map[int64]*Config` (delivered, not yet acknowledged), `lkgPending *Config` (applied, not yet written), `lastRejected int64`, `lastErr string`, `reportDirty bool`. Plus a capacity-1 `notify chan struct{}` that is **never closed**.
+
+**Watch / startup.**
+
+1. Second call: `(nil, ErrAlreadyWatching)`. Watch never returns any other error: an unreachable control plane is transient (`ConfigSource` point 2).
+2. If `LKGPath != ""` and the file is readable: `config.ParseJSON` (strict, Normalize, Validate). If that succeeds and `Version > 0`, the config is sent on the channel first (the buffer is empty, so this cannot block), `delivered = Version`, `pending[Version] = cfg`. A missing file is silent; an unreadable, unparseable or invalid file is logged at Warn and ignored (never deleted). `cursor` stays 0 until the reconcile loop calls `Applied`.
+3. Start two goroutines, the **stream reader** and the **worker**, tracked by a WaitGroup. A third goroutine waits on the WaitGroup and then closes the channel, so the channel closes only after both have exited (`ConfigSource` point 7).
+4. The first connection attempt starts immediately, without waiting for the LKG ack. If it connects before `Applied(lkgVersion)`, it sends `since=0` and receives head; if head equals the LKG version, it is dropped by the high-water rule below.
+
+**Connection.** `GET {BaseURL}/v1/config/stream?node={url.QueryEscape(NodeID)}&since={cursor}` with `Authorization: Bearer {Token}` and `Accept: text/event-stream`. The source does **not** send `Last-Event-ID`: `since` already carries the applied cursor, and the server honours `Last-Event-ID` only for generic SSE clients. The request ctx is a child of the Watch ctx, canceled by the idle timer or by shutdown.
+
+- Only `200` with media type `text/event-stream` (parameters ignored) is a stream. Anything else (including transport errors): read and discard at most 4 KiB of body, close it, log (401 at Error level because it means a misconfigured token, everything else at Warn), back off, retry. The source never gives up.
+- **Parsing.** Lines end in `\n`; one trailing `\r` is stripped. An empty line dispatches the event being built. A line starting with `:` is a comment (heartbeat). Otherwise the field name is everything before the first `:`, and the value is everything after it with **one** leading space removed (a line with no `:` is a field with an empty value). Fields: `id` (last one wins), `event`, `data` (several data lines join with `\n`); `retry` and unknown fields are ignored. An event whose type is not `config` (including the SSE default `message`) is ignored.
+- **Limits.** A single line longer than `MaxEventBytes + 64` bytes, or an event whose accumulated `data` exceeds `MaxEventBytes`, is a protocol error: log at Error, close the connection, back off. (There is no safe way to resynchronise mid-event.)
+- **Idle detection.** A timer is reset on every line read. If it fires (`IdleTimeout` with no bytes), the request ctx is canceled, the body read fails, and the source reconnects with backoff.
+- **Healthy frame.** The first complete frame on a connection (a dispatched event of any type, or a comment line) sets `attempt = 0` and `Connected() = true`. `Connected()` becomes false when the connection ends. Heartbeats count, so a load balancer that cuts idle connections every 60 s does not ratchet the backoff up.
+
+**Handling a `config` event,** in this order:
+
+1. `config.ParseJSON(data)`: strict decode (`DisallowUnknownFields`, trailing data rejected), Normalize, Validate. On error: log at Error ("invalid config from control plane"), drop. The connection stays open.
+2. If an `id` field was present and is not exactly `strconv.FormatInt(cfg.Version, 10)`: log, drop.
+3. If `cfg.Version <= delivered`: drop (Debug log). This removes duplicates, stale versions after a database restore, and versions this process already delivered, including ones it saw `Rejected`.
+4. `delivered = cfg.Version`, `pending[cfg.Version] = cfg`, `replaceLatest(out, cfg)` (the existing capacity-1 latest-wins helper; RemoteSource is the only sender).
+
+Dropped events still count as healthy frames. A config with zero routes is delivered normally: FileSource's zero-route guard exists to catch half-written files, and a control-plane version is an atomic, deliberate, audited commit (it is also how an operator empties a gateway on purpose; rollback undoes it).
+
+**Backoff.** `attempt` starts at 0 and is reset by a healthy frame. Before each reconnect (never before the first connect): `cap = min(BackoffMax, BackoffMin << attempt)` (stop shifting once `cap >= BackoffMax`, so it cannot overflow), `d = cap/2 + Rand()*cap/2` ("equal jitter"), `Sleep(ctx, d)`, then `attempt++`. If `Sleep` returns an error (ctx done), the stream reader exits. Example with `BackoffMin=100ms`, `BackoffMax=400ms`, `Rand` always 0: sleeps of 50, 100, 200, 200 ms ..., then 50 ms again after a healthy frame. Equal jitter instead of full jitter: it still spreads the reconnect storm after a control-plane restart, but never reconnects faster than `BackoffMin/2`, so a control plane that answers 401 instantly cannot be hammered in a tight loop.
+
+**Acknowledgements** (contract in `internal/config/ack.go`; both return after an O(1) critical section and a non-blocking send on `notify`, no I/O):
+
+- `Applied(v)`: if `pending[v]` is missing, log Warn and return. Otherwise `cursor = max(cursor, v)`; `lkgPending = pending[v]` (only if `LKGPath != ""`); delete every pending entry `<= v`; `reportDirty = true`; signal.
+- `Rejected(v, err)`: if `pending[v]` is missing, log Warn and return. Otherwise `lastRejected = max(lastRejected, v)`, `lastErr = err.Error()` truncated to 1024 bytes on a UTF-8 rune boundary; delete pending entries `<= v`; `cursor` and the LKG file are left alone; `reportDirty = true`; signal; log at Error.
+- **A rejected version is not re-requested and not re-applied within the process.** It stays `<= delivered`, so when the stream offers it again (every reconnect with `since = cursor < v` gets head `v`), step 3 drops it. That costs one event per reconnect and no rebuild, so there is no hot loop of failing builds. `cursor` stays at the version actually running, so the `since` the control plane sees (and shows as `applied_version`) is truthful. After a gateway **restart**, `delivered` starts again from the LKG version, so `v` is tried exactly once more. That is deliberate: the usual causes of a build failure that passed validation (a missing JWT key file or secret env var) are fixed by a redeploy. To make running gateways retry without a restart, the operator re-publishes it: `POST /v1/config/rollback {"to_version": v}` creates `head+1` with the same body. Alternatives rejected: advancing `cursor` on `Rejected` (the control plane would believe a version is running that is not); remembering nothing and rebuilding on every reconnect (a failing build every reconnect, plus log spam).
+
+**Worker goroutine** (the only place with disk or status-network I/O):
+
+- Loop on `notify` or `ctx.Done()`. On `notify`, under the mutex take `lkg := lkgPending; lkgPending = nil` and, if `reportDirty`, a report `{applied: cursor, last_rejected: lastRejected, error: lastErr}` and clear `reportDirty`. Then, outside the mutex:
+- **LKG write** (if `lkg != nil`): `json.Marshal(lkg)` → `os.CreateTemp(filepath.Dir(LKGPath), filepath.Base(LKGPath)+".tmp-*")` (mode 0600) → write → `Sync` → `Close` → `os.Rename(tmp, LKGPath)`. On any error remove the temp file and log at Error; it is not retried until the next `Applied`, and `cursor` is not rolled back (the config is live in memory; the file only matters after a restart).
+- **Status POST** (if a report was taken): `POST {BaseURL}/v1/dataplanes/{url.PathEscape(NodeID)}/status`, JSON body with exactly the `controlplane.StatusReport` shape (the source declares its own unexported struct with the same tags), `Content-Type: application/json`, the Bearer token, ctx = `context.WithTimeout(watchCtx, StatusTimeout)`. Anything but 204, or a transport error: log at Warn. Not retried; the next ack sends a fresher report anyway.
+- On `ctx.Done()`: if `lkgPending != nil`, perform that final LKG write (disk only, no network), then exit.
+
+**Shutdown.** Canceling the Watch ctx cancels the stream request ctx, so the blocked body read returns and the reader exits (a backoff `Sleep` returns `ctx.Err()`). The worker does its final LKG write and exits. Then the closer goroutine closes the channel. `Applied`/`Rejected` calls after this only update state and do a non-blocking send on `notify` (never closed, nobody reading), so they cannot panic or leak.
+
+**cmd/gateway wiring.** `-control-plane URL` (mutually exclusive with `-config`), `-node-id` (default `os.Hostname()`, which is the pod name in Kubernetes), `-lkg-file` (default `""`; the Kubernetes manifest points it at an `emptyDir`, which survives container restarts but not rescheduling), and `TOLLGATE_DATAPLANE_TOKEN` from the environment (startup fails if empty).
+
+**Cross-plane contract test.** `internal/controlplane` may import `internal/config`, so one end-to-end test runs `NewHandler` (with `MemStore`) behind `httptest.Server` and points a real `config.NewRemoteSource` at it: write → event → `Applied` → status visible in `GET /v1/dataplanes`. It pins the wire format from both sides.
+
+## 6. Control plane (Phase 4)
+
+Storage, versioning, rollback and migrations are decided in ADR 0008. Go contracts: `internal/controlplane/store.go`, `hub.go`, `api.go`.
+
+### 6.1 Storage
 
 ```sql
+-- internal/controlplane/migrations/0001_config_versions.sql (applied by controlplane.Migrate, ADR 0008)
 CREATE TABLE config_versions (
-  version          BIGINT PRIMARY KEY,               -- head+1 under advisory lock: gapless, monotonic
-  body             JSONB  NOT NULL,                  -- full config.Config, body.version = version
-  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-  author           TEXT   NOT NULL DEFAULT '',
-  comment          TEXT   NOT NULL DEFAULT '',
-  rolled_back_from BIGINT REFERENCES config_versions(version)
+    version          BIGINT      PRIMARY KEY CHECK (version > 0),   -- head+1 under advisory lock: gapless, monotonic
+    body             JSONB       NOT NULL,                          -- full config.Config, body.version = version
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    author           TEXT        NOT NULL DEFAULT '',
+    comment          TEXT        NOT NULL DEFAULT '',
+    rolled_back_from BIGINT      REFERENCES config_versions (version) ON DELETE SET NULL,
+    CONSTRAINT config_versions_body_version CHECK ((body ->> 'version')::BIGINT = version),
+    CONSTRAINT config_versions_rollback_older CHECK (rolled_back_from IS NULL OR rolled_back_from < version)
 );
 ```
 
-Writers are serialised with `pg_advisory_xact_lock`. A plain `SELECT … FOR UPDATE` on the head row is not enough under READ COMMITTED, because the second writer re-reads the *old* head and the first update is lost.
+Writers are serialised with `pg_advisory_xact_lock`. `SELECT … FOR UPDATE` on the head row is not enough: under READ COMMITTED the second writer, once unblocked, is handed the *old* head row, computes the same `head+1` and fails on the primary key (a spurious 500 without a retry loop), and on an empty table there is no row to lock at all (ADR 0008).
 
-API (Go 1.22+ `ServeMux` method patterns, standard library only):
+An empty database is version 0, the empty config. Version 0 is never stored or streamed; gateways stay not-ready until the first write.
 
-| Method and path | Purpose |
-|---|---|
-| `GET /v1/config` | head config |
-| `PUT /v1/config` | replace the whole document (seed from YAML) |
-| `GET /v1/config/versions`, `GET /v1/config/versions/{version}` | history |
-| `GET/PUT/DELETE /v1/routes/{name}`, `GET /v1/routes` | route CRUD (each write = new version) |
-| `GET/PUT/DELETE /v1/upstreams/{name}`, `GET /v1/upstreams` | upstream CRUD |
-| `POST /v1/config/rollback` `{"to_version": N}` | default head-1; creates a new version |
-| `GET /v1/config/stream?since=N&node=ID` | SSE (ADR 0005). **Data-plane token only.** |
-| `POST /v1/dataplanes/{node}/status` `{"applied":N,"last_rejected":M,"error":"..."}` | best-effort ack from `RemoteSource`. **Data-plane token only.** |
-| `GET /v1/dataplanes` | per node: connected, version last **offered**, last **applied**, last **rejected** + error (in memory) |
-| `/healthz`, `/readyz`, `/metrics` | ops, no token (not under `/v1`) |
+### 6.2 Wiring and listener
 
-Auth: every `/v1/*` endpoint other than the two marked "data-plane token only" requires `TOLLGATE_ADMIN_TOKEN`, **including reads**. The two data-plane endpoints accept only `TOLLGATE_DATAPLANE_TOKEN`. Both tokens are sent as `Authorization: Bearer`, must be at least 32 bytes and different from each other (otherwise startup fails), and are compared as SHA-256 digests with `subtle.ConstantTimeCompare`. There is no TLS between the planes in v1 (ADR 0005, Security).
+```go
+// cmd/controlplane
+pool, _ := pgxpool.New(ctx, os.Getenv(controlplane.EnvDatabaseURL))
+controlplane.Migrate(ctx, pool)                     // fatal on error, before listening
+store := controlplane.NewPostgresStore(pool)
+hub   := controlplane.NewHub()
+nodes := controlplane.NewNodes(nil, 0)
+h, err := controlplane.NewHandler(controlplane.Options{Store: store, Hub: hub, Nodes: nodes,
+    AdminToken: os.Getenv(controlplane.EnvAdminToken), DataPlaneToken: os.Getenv(controlplane.EnvDataPlaneToken),
+    Metrics: promhttp.HandlerFor(reg, promhttp.HandlerOpts{}), Logger: logger})   // err → exit non-zero
+srv := &http.Server{Addr: *listen /* default ":9000" */, Handler: h,
+    ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 120 * time.Second, MaxHeaderBytes: 1 << 20}
+    // no ReadTimeout/WriteTimeout: they would kill SSE streams; stream writes have their own deadline
+srv.RegisterOnShutdown(hub.Close)
+```
 
-Status codes: 400 for validation (`errors.Is(err, config.ErrInvalid)`), 404 for an unknown name or version, 412 for an `If-Match` mismatch, 401 for a missing or wrong token (including the right token on the wrong endpoint).
+**One listener** serves `/v1/*`, `/healthz`, `/readyz` and `/metrics`. The gateway separates ops endpoints from its traffic port because the traffic port is public. That reason does not apply here: the whole control plane is cluster-internal (ADR 0001), every `/v1` endpoint requires a token, and `/metrics` exposes no config or secrets. One port means one Service, one probe target and one Compose port. Alternative: a separate `-ops-listen` so a NetworkPolicy can let Prometheus and the kubelet reach only the ops port. It is cheap to add later if a policy needs it.
+
+**Shutdown** on SIGTERM: `srv.Shutdown(10 s drain)` (it runs `hub.Close`, which ends every stream immediately; non-stream requests finish) → cancel the root ctx → `pool.Close()` → exit. No shutdown delay: there is one replica, and gateways reconnect with backoff while serving their current config.
+
+### 6.3 Rules that apply to every `/v1` endpoint
+
+1. **Routing.** Go 1.22 `ServeMux` method patterns. An unknown path is 404 and a known path with the wrong method is 405 (with `Allow`), both straight from `ServeMux` with its plain-text body, **before** any token check. Unknown query parameters are ignored. `{name}` and `{node}` are single path segments (`PathValue`, already unescaped).
+2. **Check order** (tests rely on it): token → path, query and header syntax (400) → body read (413) and decode (400) → name check (400) → Store (412, then 404/400, then 500).
+3. **Auth.** `Authorization: Bearer <token>`: scheme matched case-insensitively, one space, the rest is the token. Both sides are SHA-256 hashed and compared with `subtle.ConstantTimeCompare`. A missing header, another scheme, a wrong token, or the right token on the wrong endpoint is **401** with `WWW-Authenticate: Bearer` and body `{"error":"unauthorized"}` (the same body in every case). The admin token is accepted on every `/v1` endpoint except `GET /v1/config/stream` and `POST /v1/dataplanes/{node}/status`; the data-plane token is accepted **only** on those two. Tokens must be ≥ 32 bytes and different from each other, otherwise `NewHandler` returns an error and the process exits.
+4. **Bodies.** Read through `http.MaxBytesReader(MaxBodyBytes = 1 MiB)`; exceeding it is **413** `{"error":"request body too large"}`. Decoded with `json.Decoder.DisallowUnknownFields`; malformed JSON, an unknown field, a wrong type, an empty body (where a body is required) or anything but whitespace after the top-level value is **400**. The request `Content-Type` is not checked (so `curl -d` works). Bodies of GET and DELETE are ignored.
+5. **Responses.** JSON bodies have `Content-Type: application/json`. Every non-2xx response from `/v1` (except the `ServeMux` 404/405) has body `ErrorBody` `{"error":"..."}`. A 500 body is always `{"error":"internal error"}`; the detail is logged.
+6. **Versions.** Every 2xx response about config carries `ETag: "<version>"` (quoted decimal): the head version for reads of head, routes and upstreams; the stored version for `GET /v1/config/versions/{version}`; the **new** version for every successful write (including 204 deletes). There is no `X-Config-Version` header.
+7. **If-Match** (optional, on every write: PUT, DELETE, rollback): exactly one entity tag, `"N"` or bare `N`, N a non-negative decimal int64. Anything else (`*`, `W/"N"`, a list, garbage) is **400**. It is compared with head under the write lock; a mismatch is **412** `{"error":"controlplane: version conflict: if-match N, head is M"}` and nothing is written. Because the Store checks `If-Match` before running `mutate`, a stale `If-Match` on a DELETE of a missing name is 412, not 404. `If-Match: "0"` succeeds only on an empty store.
+8. **Audit headers** (optional, on every write): `X-Tollgate-Author` (≤ 128 bytes) and `X-Tollgate-Comment` (≤ 1024 bytes), stored verbatim. Longer is **400**.
+9. **Store error mapping:** `errors.Is(err, ErrVersionConflict)` → 412; `ErrNotFound` → 404; `config.ErrInvalid` → 400 with `{"error": err.Error()}` (the joined, one-problem-per-line validation message); anything else → 500. Non-stream handlers call the Store with a `StoreTimeout` (10 s) ctx.
+10. **Publishing.** After every successful write, the handler calls `Hub.Publish(cfg)` with the returned config **before** writing the response, then never modifies `cfg`.
+11. **Every successful write creates a new version**, even if the document did not change (ADR 0008).
+12. **Names.** The path segment is the object's identity. A PUT body whose `name` is `""` takes the path name; a non-empty `name` that differs from the path is **400** `{"error":"name in body does not match path"}`. Renaming is delete + create. PUT replaces an existing object **in place** (same slice position) or appends a new one. List responses are sorted by name.
+
+### 6.4 Endpoints
+
+All `/v1` rows can also return 401 (rule 3) and 500 (rule 9). "Write errors" means: 400 (body, If-Match or audit-header syntax, or the resulting config fails `Validate`), 412 (If-Match), 413 (body too large).
+
+| # | Method and path | Token | Request | Success | Errors |
+|---|---|---|---|---|---|
+| 1 | `GET /v1/config` | admin | — | 200, head `config.Config`; `ETag` head. Empty store: `{"version":0,...}`, `ETag: "0"` | — |
+| 2 | `PUT /v1/config` | admin | full `config.Config`; its `version` is ignored | 200, stored config (normalized, new version); `ETag` new | write errors |
+| 3 | `GET /v1/config/versions?limit=L&before=B` | admin | — | 200 `VersionList`, descending. `limit` default 50, values > 500 clamped to 500; `before` absent = from head | 400: L or B not a decimal integer, L < 1, B < 1 |
+| 4 | `GET /v1/config/versions/{version}` | admin | — | 200, that version's `config.Config`; `ETag: "<version>"` | 400: not a decimal integer or negative. 404: 0 or not stored |
+| 5 | `POST /v1/config/rollback` | admin | optional `RollbackRequest`; empty body, `{}` or `to_version: 0` = head−1 | 200, the new config (version head+1, body of the target); `ETag` new | write errors (400 also: `to_version` < 0, or the target is invalid under today's rules). 404: target not in 1..head, including the default target when head ≤ 1 |
+| 6 | `GET /v1/routes` | admin | — | 200 `RouteList`; `ETag` head | — |
+| 7 | `GET /v1/routes/{name}` | admin | — | 200 `config.Route` (normalized); `ETag` head | 404: no such route |
+| 8 | `PUT /v1/routes/{name}` | admin | `config.Route` | **201** + `Location: /v1/routes/{name}` if it did not exist, **200** if replaced; body = stored route; `ETag` new | write errors (400 also: body name ≠ path; unknown upstream; duplicate host + path_prefix; ...) |
+| 9 | `DELETE /v1/routes/{name}` | admin | — | 204, no body; `ETag` new | 404: no such route. 412 |
+| 10 | `GET /v1/upstreams` | admin | — | 200 `UpstreamList`; `ETag` head | — |
+| 11 | `GET /v1/upstreams/{name}` | admin | — | 200 `config.Upstream` (normalized); `ETag` head | 404: no such upstream |
+| 12 | `PUT /v1/upstreams/{name}` | admin | `config.Upstream` | 201 + `Location: /v1/upstreams/{name}` / 200, as row 8 | write errors (400 also: body name ≠ path; both or neither of backends/consul; bad backend URL; ...) |
+| 13 | `DELETE /v1/upstreams/{name}` | admin | — | 204; `ETag` new | 404: no such upstream. **400: still referenced by a route** (the validation error names the route; there is no cascade). 412 |
+| 14 | `GET /v1/config/stream?node=ID&since=N` | **data-plane** | `Last-Event-ID` optional | 200 `text/event-stream` (§6.5) | 400: `node` missing or invalid; `since` or `Last-Event-ID` not a non-negative decimal int64. 500: `Store.Head` failed (before any stream bytes) |
+| 15 | `POST /v1/dataplanes/{node}/status` | **data-plane** | `StatusReport` | 204, no body | 400: invalid `{node}`; malformed body or unknown field; `applied` or `last_rejected` < 0; `error` > 1024 bytes. 413 |
+| 16 | `GET /v1/dataplanes` | admin | — | 200 `DataPlaneList` (sorted by node; `[]` if none); no `ETag` | — |
+| 17 | `GET /healthz` | none | — | 200 `text/plain` `ok` (process is up) | — |
+| 18 | `GET /readyz` | none | — | 200 `text/plain` `ok` if `Store.Ping` succeeds within 2 s (database reachable **and** schema at the newest embedded migration) | 503 `text/plain` `not ready` |
+| 19 | `GET /metrics` | none | — | Prometheus exposition from `Options.Metrics` | 404 if `Options.Metrics` is nil |
+
+A valid node ID is 1..128 bytes of `[A-Za-z0-9._-]` starting with a letter or digit (the same rule `RemoteSource` enforces).
+
+Seeding: `PUT /v1/config` with the whole document (optionally `If-Match: "0"`) avoids intermediate versions such as "upstream exists, route not yet", which `PUT /v1/routes/...` one object at a time would stream to gateways.
+
+### 6.5 The config stream (`GET /v1/config/stream`)
+
+Handler sequence, in this order:
+
+1. Token check (data-plane), then parameters: `node` required and valid; `since` optional (default 0); a non-empty `Last-Event-ID` header overrides `since`. Any syntax error → 400 JSON.
+2. `sub, cancel := hub.Subscribe(); defer cancel()`. **Subscribe first.**
+3. `head, err := store.Head(ctx)` (StoreTimeout). Error → 500 JSON (no stream bytes written yet). Reading head **after** subscribing means a version committed and published between the two steps is caught by one or the other; it cannot fall into a gap.
+4. Response headers: `Content-Type: text/event-stream`, `Cache-Control: no-store`, `X-Accel-Buffering: no`; `WriteHeader(200)`; flush (so the client sees the stream open even when there is nothing to send).
+5. `disconnect := nodes.Connect(node, since); defer disconnect()`.
+6. `lastSent := since`. If `head.Version > since`: write head as an event, `lastSent = head.Version`, `nodes.Offered`. If `head.Version == since`: send nothing. If `since > head.Version` (database wiped): log Warn, send nothing until a version > `since` is published (ADR 0005, Consequences).
+7. Loop on `select`:
+   - `r.Context().Done()` (client gone) → return.
+   - `cfg, ok := <-sub`: `!ok` (hub closed: shutdown) → return; if `cfg.Version > lastSent` → write event, `lastSent = cfg.Version`, `nodes.Offered`; else ignore (the primed slot or a version already sent as head).
+   - heartbeat ticker (`Options.Heartbeat`, default 15 s; first tick one interval after connect) → write `HeartbeatComment`, `nodes.Seen`.
+8. Every write: `http.NewResponseController(w).SetWriteDeadline(now + StreamWriteTimeout)`, write, `Flush`. Any error (including a flush that is unsupported) → return.
+
+Wire format, byte-exact (`json.Marshal` of the full `config.Config`, one line):
+
+```
+HTTP/1.1 200 OK
+Content-Type: text/event-stream
+Cache-Control: no-store
+X-Accel-Buffering: no
+
+id: 42
+event: config
+data: {"version":42,"defaults":{"timeouts":{}},"auth":{},"routes":[...],"upstreams":[...]}
+
+: heartbeat
+
+```
+
+The server never sends `retry:` or any event type other than `config`. On shutdown the handler returns and the response ends normally (end of chunked body); the client sees EOF and reconnects with its own backoff (§5.1), which keeps failing harmlessly until the control plane is back.
+
+### 6.6 Data-plane status
+
+`POST /v1/dataplanes/{node}/status` with `{"applied": 42, "last_rejected": 43, "error": "build: jwt public key: open /keys/jwt.pem: no such file"}`. The report describes the gateway process's whole current state, so `Nodes.Report` overwrites `applied_version`, `rejected_version` and `last_error`. `GET /v1/dataplanes` returns, per node, `connected`, `connected_at`, `last_seen`, `last_offered_version`, `applied_version` (from `since` at connect, then from reports), `rejected_version` and `last_error` (`NodeStatus` in `hub.go`). The registry is in memory, informational, lost on restart, and drops disconnected nodes not seen for 1 h (lazily, on `List`). The control plane never acts on a rejection.
 
 ## 7. Goroutines and shutdown
 
@@ -244,9 +417,10 @@ Every goroutine has exactly one owner and one way to stop.
 | Discovery watch and forwarder (one per service) | reconcile loop | per-watch child ctx canceled (service unreferenced) or root ctx; every forwarder send selects on that ctx |
 | Probe (one per backend pointer) | `health.Checker.Run` | per-probe ctx canceled by `Sync`, or `Run`'s ctx; `Run` waits for all |
 | Limiter sweepers (`TokenBucket.Run`, two: route limiter and failed-auth limiter) | `cmd/gateway` | root ctx |
-| RemoteSource status reporter (Phase 4) | `RemoteSource` | root ctx; exits before the source closes its channel |
-| SSE stream handlers (control plane) | `http.Server` | client disconnects, or `Hub.Close` through `RegisterOnShutdown` |
-| SSE hub | `cmd/controlplane` | root ctx |
+| RemoteSource stream reader (Phase 4) | `RemoteSource` | root ctx: cancels the stream request (blocked body read returns) and any backoff `Sleep` |
+| RemoteSource worker: LKG write + status POST (Phase 4) | `RemoteSource` | root ctx, after a final LKG write if one is pending; the channel closes only after both RemoteSource goroutines exit (§5.1) |
+| SSE stream handlers (control plane) | `http.Server` | client disconnects, write deadline exceeded, or `Hub.Close` through `RegisterOnShutdown` |
+| SSE hub | none: the hub has **no goroutine** (mutex + non-blocking sends) | `Hub.Close` closes every subscriber channel |
 
 Gateway shutdown on SIGTERM:
 
@@ -280,7 +454,7 @@ Gateway shutdown on SIGTERM:
 
 ## 10. Open questions (for the orchestrator or owner)
 
-1. **`internal/controlplane`** is not in the CLAUDE.md layout. Without it, all control-plane logic would sit in `package main`, which hurts testability and the ≥ 80% `internal/` coverage target. Proposed: add it.
+1. **`internal/controlplane`** is not in the CLAUDE.md layout. Without it, all control-plane logic would sit in `package main`, which hurts testability and the ≥ 80% `internal/` coverage target. **Resolved at the Phase 0 checkpoint: added.**
 2. **`go.mod` says `go 1.27.4`.** Code is written to be valid on Go 1.23+, but that directive forces 1.27 toolchains. If 1.23 compatibility matters (CI matrix, Docker base image), set `go 1.23`.
 3. **No retries in v1.** A connection-refused error on an idempotent request could be retried once on another backend, which would improve chaos-test failover numbers. Deferred to keep the proxy small. Revisit after Phase 8.
 4. **Client IP for rate limiting comes from `RemoteAddr` only** (IPv6 masked to /64, §11 item 10). Behind a Kubernetes load balancer, every client may appear as the same IP. A `trusted_proxies` setting (CIDRs whose X-Forwarded-For we believe) could be added in Phase 3 or 7.
@@ -294,7 +468,7 @@ Builders and test-writers: each row is binding for its phase. The "Contract chan
 | # | Finding (one line) | Decision | Implemented in phase | Contract change (file: what) |
 |---|---|---|---|---|
 | 1 | Router matches a path that the upstream normalises differently (`/public/%2e%2e/admin`), so auth can be bypassed. | 400 **before routing** if the decoded `r.URL.Path` has a `.` or `..` segment, or **[A]** a segment that is `.`/`..` before a `;` (Tomcat-style `..;`), an empty segment (`//`), or a byte < 0x20 or 0x7f. Also 400 if `r.URL.EscapedPath()` contains `%2f`, `%5c` or `%2e` (case-insensitive) or a literal `\`. The router matches `r.URL.Path`, which is exactly the forwarded path. | 1 (fix round) | `internal/proxy`: unexported `checkPath(u *url.URL) error`, called before `router.Match`. `internal/config/config.go` `Route` doc: add rule "0. unsafe paths → 400 before matching". |
-| 2 | LKG file and version are committed before the snapshot build can fail. | Optional `config.Acknowledger`. The reconcile loop calls `Applied`/`Rejected` after each **config-triggered** build. `RemoteSource` writes LKG and advances `since` only on `Applied`. Best-effort `POST /v1/dataplanes/{node}/status`. `/v1/dataplanes` shows offered/applied/rejected. An LKG that fails to parse, validate or build is ignored (log, wait for the stream). | 4 | `internal/config/source.go`: add `type Acknowledger interface { Applied(version int64); Rejected(version int64, err error) }`. Doc: optional, called only from the reconcile goroutine, must not block on network I/O. `ConfigSource` doc point 3: "last-known-good" becomes "last **applied** copy". `internal/proxy` `Gateway.Run`: `if a, ok := src.(config.Acknowledger)`. |
+| 2 | LKG file and version are committed before the snapshot build can fail. | Optional `config.Acknowledger`. The reconcile loop calls `Applied`/`Rejected` after each **config-triggered** build. `RemoteSource` writes LKG and advances `since` only on `Applied`. Best-effort `POST /v1/dataplanes/{node}/status`. `/v1/dataplanes` shows offered/applied/rejected. An LKG that fails to parse, validate or build is ignored (log, wait for the stream). | 4 | **Done in `internal/config/ack.go`** (Phase 4 design; do NOT also declare it in `source.go`): `type Acknowledger interface { Applied(version int64); Rejected(version int64, err error) }`, with the full caller/implementation contract in its doc comment. `ConfigSource` doc point 3: "last-known-good" becomes "last **applied** copy". `internal/proxy` `Gateway.Run`: `if a, ok := src.(config.Acknowledger)`. |
 | 3 | A re-added backend gets a new `*Backend` from the Registry but is never probed (Sync diffs by ID). | `Checker.Sync`/`Run` diff by **pointer identity + check settings**. A new pointer for a known ID starts a new probe, and the old pointer's probe stops. | 2 | `internal/health`: `Checker`/`Sync` doc as in §2 sketch. Test: prune ID, re-add, assert the new pointer goes down after `fall` failed probes. |
 | 4 | Discovery forwarders can deadlock shutdown and deliver stale sets. | Every forwarder send is a `select` with `ctx.Done()`. Each watch has a loop-assigned `generation`, and the loop drops updates whose generation is not the current one for that key. | 5 | `internal/proxy` (unexported): `endpointUpdate{key string; gen uint64; eps []discovery.Endpoint}`. `internal/discovery/discovery.go` `Resolver` doc point 5: "sends never block (latest-wins replace)". |
 | 5 | Control-plane hub can publish v6 before v5 and lose the newest. | The hub tracks the max published version and ignores `<=`. The per-subscriber capacity-1 slot is "highest version wins". The stream handler **subscribes first, then reads head**, and forwards only versions greater than the last one it sent. | 4 | `internal/controlplane`: `Hub.Publish(*config.Config)` doc: "no-op if Version <= max published". `Hub.Subscribe() (<-chan *config.Config, func())` doc: slot replaced only by a higher version. Stream handler doc states the subscribe-then-head order. |

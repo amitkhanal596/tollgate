@@ -1,6 +1,6 @@
 # ADR 0005: Push config to data planes over Server-Sent Events
 
-Status: Accepted (Phase 0; amended after the Phase 0 review, see architecture.md §11 items 2, 5, 6, 15 and 16)
+Status: Accepted (Phase 0; amended after the Phase 0 review, see architecture.md §11 items 2, 5, 6, 15 and 16; amended again by the Phase 4 design: `Cache-Control: no-store`, the client sends `since` only, equal jitter with a frame-based reset, LKG writes moved off the reconcile goroutine, rejected versions are not re-applied. The binding protocol details are in architecture.md §5.1 and §6.5; storage is ADR 0008.)
 
 ## Context
 
@@ -21,12 +21,12 @@ The control plane stores every config as an immutable, numbered version in Postg
 Protocol:
 
 ```
-GET /v1/config/stream?since=41&node=gw-7      (reconnects also send Last-Event-ID: 41; header wins)
-Authorization: Bearer <TOLLGATE_DATAPLANE_TOKEN>
+GET /v1/config/stream?since=41&node=gw-7      (the server also honours Last-Event-ID, which wins over since;
+Authorization: Bearer <TOLLGATE_DATAPLANE_TOKEN>  RemoteSource sends only since, generic SSE clients send the header)
 
 HTTP/1.1 200 OK
 Content-Type: text/event-stream
-Cache-Control: no-cache
+Cache-Control: no-store
 X-Accel-Buffering: no
 
 id: 42
@@ -37,13 +37,13 @@ data: {"version":42,"routes":[...],"upstreams":[...]}
 ```
 
 - **Version assignment:** `version = head + 1`, computed inside the same transaction that holds `pg_advisory_xact_lock`. Versions are therefore gapless and strictly increasing. There is no Postgres sequence: `nextval` is not transactional, so aborted writes would leave gaps, and the advisory lock already serialises writers, so a sequence adds nothing.
-- **How the data plane says which version it has:** through `since` on the first connect (0 means "I have nothing") and `Last-Event-ID` on reconnects. Both carry the version the gateway has **applied**, not merely received (see Acknowledgement below). If the head version is greater than that number, the server immediately sends the head version and then streams every new publish. It sends only the head, never each skipped version, because events are **full snapshots, not diffs**. A missed event therefore cannot corrupt state, and applying the same version twice does nothing. `data:` is one line of JSON (`json.Marshal` never emits newlines), which keeps the framing trivial. If `since` is greater than head (the database was wiped), the server logs a warning and sends nothing until head passes it.
-- **Data plane client (`config.RemoteSource`):** it never delivers a version less than or equal to the highest version it has already delivered in this process. It decodes strictly (`json.Decoder.DisallowUnknownFields`), validates the rest, and delivers them on its latest-wins channel. It does **not** write the last-known-good (LKG) file at this point (see Acknowledgement). It raises `bufio.Scanner`'s 64 KiB line limit (to about 8 MiB), because configs can be large. If no bytes arrive (not even a heartbeat) for 45 s, it reconnects. Reconnects use exponential backoff from 500 ms to 30 s with full jitter, and the backoff resets after receiving an event.
+- **How the data plane says which version it has:** through `since` on every connect (0 means "I have nothing"; generic SSE clients may send `Last-Event-ID` instead, and the header wins). It carries the version the gateway has **applied**, not merely received (see Acknowledgement below). If the head version is greater than that number, the server immediately sends the head version and then streams every new publish. It sends only the head, never each skipped version, because events are **full snapshots, not diffs**. A missed event therefore cannot corrupt state, and applying the same version twice does nothing. `data:` is one line of JSON (`json.Marshal` never emits newlines), which keeps the framing trivial. If `since` is greater than head (the database was wiped), the server logs a warning and sends nothing until head passes it.
+- **Data plane client (`config.RemoteSource`):** it never delivers a version less than or equal to the highest version it has already delivered in this process. It decodes strictly (`json.Decoder.DisallowUnknownFields`), validates the rest, and delivers them on its latest-wins channel. It does **not** write the last-known-good (LKG) file at this point (see Acknowledgement). It caps one event at 8 MiB (far above the 64 KiB `bufio.Scanner` default, because configs can be large); a bigger event closes the connection. If no bytes arrive (not even a heartbeat) for 45 s, it reconnects. Reconnects use exponential backoff from 500 ms to 30 s with **equal** jitter (a delay in `[cap/2, cap)`), so a control plane that rejects instantly (for example 401) cannot be hammered in a tight loop, while reconnect storms after a control-plane restart are still spread out. The backoff resets after the first complete frame (event or heartbeat) on a connection. Exact rules: architecture.md §5.1.
 - **Acknowledgement (`config.Acknowledger`).** A source may implement the optional interface `Acknowledger { Applied(version int64); Rejected(version int64, err error) }`. After every build attempt for a received config, the gateway's reconcile loop calls `Applied` (the snapshot was built and stored) or `Rejected` (the build failed and the old snapshot stays). `RemoteSource` implements it:
   - It keeps each delivered-but-unacknowledged `*Config` keyed by version (at most two: one in the channel, one being built).
-  - On `Applied(v)` it writes the LKG file for `v` (temp file plus rename) and advances its `since` cursor to `v`. Only `Applied` advances the cursor.
-  - On `Rejected(v, err)` it logs, increments a counter, and leaves both the LKG file and the cursor alone.
-  - In both cases it reports `{applied, last_rejected, error}` to `POST /v1/dataplanes/{node}/status`. This report is best-effort: it is sent from RemoteSource's own goroutine (latest wins, never on the reconcile goroutine), and a failed report is not retried until the next ack. Neither method blocks on network I/O.
+  - On `Applied(v)` it advances its `since` cursor to `v` and marks `v` for persistence; its own worker goroutine then writes the LKG file (temp file, fsync, rename). Only `Applied` advances the cursor.
+  - On `Rejected(v, err)` it logs, increments a counter, and leaves both the LKG file and the cursor alone. `v` is not re-applied in this process: it is already at or below the "highest delivered" mark, so when a reconnect offers it again it is dropped without a rebuild (no hot loop). After a gateway restart it is tried once more; to make running gateways retry, re-publish it with a rollback to `v`.
+  - In both cases it reports `{applied, last_rejected, error}` to `POST /v1/dataplanes/{node}/status`. This report is best-effort: it is sent from RemoteSource's worker goroutine (latest wins, never on the reconcile goroutine), and a failed report is not retried until the next ack. Neither method does disk or network I/O; both return after a short critical section.
   - At startup, an LKG file that fails to parse or validate is ignored. One that is delivered but then `Rejected` simply never advances the cursor. In both cases the gateway stays not-ready and waits for the stream, with `since` set to 0.
 - **Control plane hub (ordering).** Two API transactions can commit v5 and v6 and then call `Publish` in the opposite order. So the hub tracks the **maximum version ever published and ignores any lower or equal publish**. Each subscriber has a capacity-1 slot in which the **highest version wins**: under the hub mutex, the slot is replaced only by a strictly higher version. The stream handler **subscribes first, then reads head** from the store. It sends head if head > `since`, then forwards from the subscription only versions greater than the last one it sent. Subscribing before reading head means a publish cannot fall into the gap between the two steps.
 - **Control plane shutdown:** on shutdown the hub closes every stream (`http.Server.RegisterOnShutdown`), because `Shutdown` otherwise waits forever on connections that never go idle. The control plane records, per `node`, the version last **offered** (sent on the stream) and the version last **applied** and **rejected** (from the status report, and from `since` at connect time). `GET /v1/dataplanes` shows them side by side, and it is held in memory only.
