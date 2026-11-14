@@ -10,13 +10,28 @@
 //     (jwt.WithValidMethods), checks exp/nbf with a small leeway, and the
 //     issuer/audience when configured.
 //
+// Amended rules (architecture.md section 11, rows 9 and 10):
+//   - NewAPIKey fails on a sha256 that is not 64 hex characters; zero keys is
+//     allowed and rejects every request as invalid. Several X-API-Key header
+//     values are invalid. Error text never contains the presented key.
+//   - JWT: exp is required; leeway is 30 s; NewJWT errors on a missing or
+//     < 32 byte HS256 secret, and on an RS256 key that is not RSA >= 2048 bits.
+//     A non-"Bearer" Authorization scheme counts as missing credentials; an
+//     empty bearer token is invalid. getenv, readFile and now default to
+//     os.Getenv, os.ReadFile and time.Now when nil.
+//   - ClientIPKey: port stripped, IPv4 as-is, ::ffff: IPv4-mapped un-mapped,
+//     other IPv6 masked to its /64 and rendered like "2001:db8:1:2::/64";
+//     unparseable input is returned unchanged.
+//
 // Dependency rule: auth may import internal/config (for its settings types)
 // and the JWT library; nothing else internal (docs/architecture.md).
 //
 // Planned helpers (Phase 3):
 //
-//	func NewAPIKey(keys []config.APIKey) Authenticator
-//	func NewJWT(s config.JWTSettings, now func() time.Time) (Authenticator, error)
+//	func NewAPIKey(keys []config.APIKey) (Authenticator, error)
+//	func NewJWT(s config.JWTSettings, getenv func(string) string,
+//	    readFile func(string) ([]byte, error), now func() time.Time) (Authenticator, error)
+//	func ClientIPKey(remoteAddr string) string
 //	func WithIdentity(ctx context.Context, id Identity) context.Context
 //	func IdentityFrom(ctx context.Context) (Identity, bool)
 package auth
@@ -35,7 +50,7 @@ var (
 	// ErrMissingCredentials: no API key header / no bearer token.
 	ErrMissingCredentials = errors.New("auth: missing credentials")
 	// ErrInvalidCredentials: unknown key, bad signature, expired token,
-	// wrong issuer or audience, or missing client-ID claim.
+	// wrong issuer or audience, or a missing, empty or non-string client-ID claim.
 	ErrInvalidCredentials = errors.New("auth: invalid credentials")
 )
 
