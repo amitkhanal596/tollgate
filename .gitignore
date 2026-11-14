@@ -1,0 +1,16 @@
+# binaries
+/bin/
+/gateway
+/controlplane
+*.test
+*.out
+coverage.html
+
+# editor / OS
+.DS_Store
+.idea/
+.vscode/
+
+# local env
+.env
+bench/results/raw/
