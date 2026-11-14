@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"strings"
 )
@@ -43,8 +44,12 @@ func (c *Config) Validate() error {
 		}
 		routeNames[r.Name] = true
 
-		if !strings.HasPrefix(r.PathPrefix, "/") {
-			bad("%s.path_prefix %q must start with \"/\"", where, r.PathPrefix)
+		if msg := checkPathPrefix(r.PathPrefix); msg != "" {
+			bad("%s.path_prefix %q %s", where, r.PathPrefix, msg)
+		}
+		// A port would never match: the router strips the port from the request host.
+		if _, _, err := net.SplitHostPort(r.Host); err == nil {
+			bad("%s.host %q must not contain a port", where, r.Host)
 		}
 		// Two routes with the same (host, path_prefix) would be ambiguous.
 		key := hostPath{r.Host, r.PathPrefix}
@@ -85,6 +90,7 @@ func (c *Config) Validate() error {
 		bad("auth.jwt must be set because a route uses auth jwt")
 	}
 	clients := make(map[string]bool, len(c.Auth.APIKeys))
+	hashes := make(map[string]bool, len(c.Auth.APIKeys))
 	for i, k := range c.Auth.APIKeys {
 		where := fmt.Sprintf("auth.api_keys[%d]", i)
 		if k.ClientID == "" {
@@ -96,7 +102,10 @@ func (c *Config) Validate() error {
 		// The gateway compares against lower-case hex of a SHA-256 digest.
 		if b, err := hex.DecodeString(k.SHA256); err != nil || len(b) != 32 || k.SHA256 != strings.ToLower(k.SHA256) {
 			bad("%s.sha256 must be 64 lower-case hex characters", where)
+		} else if hashes[k.SHA256] {
+			bad("%s.sha256 is duplicated", where)
 		}
+		hashes[k.SHA256] = true
 	}
 	if j := c.Auth.JWT; j != nil && j.Algorithm != JWTHS256 && j.Algorithm != JWTRS256 {
 		bad("auth.jwt.algorithm %q must be HS256 or RS256", j.Algorithm)
@@ -129,9 +138,17 @@ func validateUpstream(where string, u Upstream, bad func(string, ...any)) {
 	case len(u.Backends) == 0 && u.Consul == nil:
 		bad("%s: set exactly one of backends or consul", where)
 	}
+	seen := make(map[string]bool, len(u.Backends))
 	for j, b := range u.Backends {
 		if err := checkBackend(b); err != nil {
 			bad("%s.backends[%d] %q: %v", where, j, b, err)
+			continue
+		}
+		if cb, ok := canonicalBackend(b); ok {
+			if seen[cb] {
+				bad("%s.backends[%d] %q duplicates another backend of this upstream", where, j, b)
+			}
+			seen[cb] = true
 		}
 	}
 	if cs := u.Consul; cs != nil {
@@ -185,4 +202,34 @@ func checkBackend(s string) error {
 		return errors.New("must be a base URL with no path, query or credentials")
 	}
 	return nil
+}
+
+// checkPathPrefix returns "" if p is a clean literal path. The gateway answers
+// 400 to request paths with these features before routing, so a prefix
+// containing them could never match. A trailing "/" is allowed.
+func checkPathPrefix(p string) string {
+	if !strings.HasPrefix(p, "/") {
+		return "must start with \"/\""
+	}
+	for i := 0; i < len(p); i++ {
+		switch c := p[i]; {
+		case c == '%':
+			return "must not contain percent-escapes"
+		case c == ';':
+			return "must not contain \";\""
+		case c == '\\':
+			return "must not contain a backslash"
+		case c < 0x20 || c == 0x7f:
+			return "must not contain control characters"
+		}
+	}
+	if strings.Contains(p, "//") {
+		return "must not contain an empty segment"
+	}
+	for _, seg := range strings.Split(p, "/") {
+		if seg == "." || seg == ".." {
+			return "must not contain \".\" or \"..\" segments"
+		}
+	}
+	return ""
 }

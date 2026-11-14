@@ -14,25 +14,33 @@
 // Planned functions (Phase 1):
 //
 //	// Parse decodes YAML (a superset of JSON), then calls Normalize and
-//	// Validate. It is what FileSource uses.
+//	// Validate. Unknown fields are an error. It is what FileSource uses.
 //	func Parse(data []byte) (*Config, error)
 //	// Normalize fills defaults in place: lower-cases hosts, maps Host "*"
 //	// to "", sets Algorithm to round_robin when empty, sets Auth to
-//	// "none" when empty, and fills zero health-check fields with the
-//	// Default* constants below. It does not fill route timeouts; those are
+//	// "none" when empty, strips a trailing dot and IPv6 brackets from
+//	// hosts, canonicalises backend URLs (lower-case scheme/host, default
+//	// port removed), and fills zero health-check fields with the Default*
+//	// constants below (timeout = min(DefaultHealthTimeout, interval/2)). It does not fill route timeouts; those are
 //	// resolved at snapshot build time (route -> Defaults -> Default*).
 //	func (c *Config) Normalize()
 //	// Validate returns nil or an error joining (errors.Join) one error per
 //	// problem, each wrapping ErrInvalid. Rules:
-//	//   - route names non-empty and unique; path_prefix starts with "/";
+//	//   - route names non-empty and unique; host has no port; path_prefix is
+//	//     a clean literal path (starts with "/", no percent-escapes, ";",
+//	//     "//", "." or ".." segments, backslashes or control characters);
 //	//     the (host, path_prefix) pair is unique; upstream exists;
 //	//     auth is none|api_key|jwt; api_key needs >= 1 Auth.APIKeys entry;
 //	//     jwt needs Auth.JWT; rate_limit has requests_per_second > 0 and
 //	//     burst >= 1; timeouts >= 0.
 //	//   - upstream names non-empty and unique; exactly one of backends /
 //	//     consul is set; each backend is an absolute http(s) URL with a
-//	//     host and no path; algorithm is round_robin|least_conn; health
+//	//     host and no path, unique within the upstream after
+//	//     canonicalisation; algorithm is round_robin|least_conn; health
 //	//     thresholds >= 1; 0 < timeout < interval.
+//	//   - API keys: client_id unique, sha256 64 lower-case hex and unique.
+//	//   - An empty config (no routes) is valid: the control plane starts
+//	//     empty. FileSource additionally rejects a file with no routes.
 //	func (c *Config) Validate() error
 //
 // Every ConfigSource delivers configs that have already been Normalized and
@@ -52,10 +60,11 @@ var ErrInvalid = errors.New("config: invalid")
 // immutable once a ConfigSource has delivered it: neither the source nor the
 // consumer may modify it afterwards.
 type Config struct {
-	// Version identifies this config. The control plane assigns it from a
-	// Postgres sequence, so versions are strictly increasing (ADR 0005).
-	// The file source uses the file's value if > 0, otherwise a local
-	// counter. Ignored on input to the admin API.
+	// Version identifies this config. It is assigned head+1 by the control
+	// plane inside its advisory-lock transaction, so versions are strictly
+	// increasing (ADR 0005). The file source delivers the file's value if it
+	// is higher than the last one delivered, else last+1. Ignored on input
+	// to the admin API.
 	Version int64 `yaml:"version" json:"version"`
 
 	// Defaults apply to every route that does not override them.
@@ -151,7 +160,9 @@ type Timeouts struct {
 	// after the request has been written.
 	ResponseHeader Duration `yaml:"response_header,omitempty" json:"response_header,omitempty"`
 	// Request bounds the whole proxied exchange, including streaming the
-	// response body. Enforced with a context deadline on the request.
+	// response body. It is a hard cap; there is no disabled value, so
+	// streaming or long-poll routes must set a large explicit value such as
+	// 1h. Enforced with a context deadline on the request.
 	Request Duration `yaml:"request,omitempty" json:"request,omitempty"`
 }
 
@@ -225,7 +236,8 @@ type HealthCheck struct {
 	Path string `yaml:"path" json:"path"`
 	// Interval between probes of one backend.
 	Interval Duration `yaml:"interval,omitempty" json:"interval,omitempty"`
-	// Timeout for a single probe. Must be less than Interval.
+	// Timeout for a single probe. Must be less than Interval. Default
+	// min(1s, interval/2).
 	Timeout Duration `yaml:"timeout,omitempty" json:"timeout,omitempty"`
 	// HealthyThreshold ("rise") is the number of consecutive successes
 	// that mark a down backend up again.

@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -24,8 +25,9 @@ type FileSource struct {
 
 	// Only touched by Watch (before the goroutine starts) and then by the
 	// single poll goroutine.
-	lastHash [sha256.Size]byte
-	counter  int64
+	lastHash    [sha256.Size]byte // last content acted on (applied or rejected)
+	pendingHash [sha256.Size]byte // new content seen once, awaiting confirmation
+	lastVersion int64             // last version delivered
 }
 
 // NewFileSource returns a source polling path every pollInterval. A nil
@@ -55,13 +57,22 @@ func (s *FileSource) load() (*Config, [sha256.Size]byte, error) {
 	return c, h, nil
 }
 
-// stamp gives a version-less config a local, strictly increasing version. It
-// is called only for new content so the counter tracks real changes.
+// errNoRoutes is FileSource's own rule: a gateway with no routes can only be
+// the result of a truncated or blank file. (*Config).Validate deliberately
+// accepts an empty config because the control plane starts empty.
+var errNoRoutes = errors.New("config file has no routes")
+
+// stamp makes the delivered Version strictly increasing: the file's version
+// if it is higher than the last delivered one, else last+1. Later phases drop
+// any config whose version is not higher than the applied one, so a removed,
+// unchanged or lowered `version:` must still produce a higher number.
 func (s *FileSource) stamp(c *Config) {
-	if c.Version <= 0 {
-		s.counter++
-		c.Version = s.counter
+	switch {
+	case c.Version > s.lastVersion:
+	default:
+		c.Version = s.lastVersion + 1
 	}
+	s.lastVersion = c.Version
 }
 
 // Watch implements ConfigSource.
@@ -74,6 +85,9 @@ func (s *FileSource) Watch(ctx context.Context) (<-chan *Config, error) {
 	cfg, hash, err := s.load()
 	if err != nil {
 		return nil, fmt.Errorf("config: file source cannot start: %w", err)
+	}
+	if len(cfg.Routes) == 0 {
+		return nil, fmt.Errorf("config: file source cannot start: %s: %w", s.path, errNoRoutes)
 	}
 	s.started = true
 	s.lastHash = hash
@@ -98,26 +112,33 @@ func (s *FileSource) run(ctx context.Context, out chan *Config) {
 		case <-t.C:
 		}
 		cfg, hash, err := s.load()
-		if err != nil {
-			if hash == ([sha256.Size]byte{}) { // read failure: transient, retry
-				if !readFailing {
-					s.logger.Warn("config file unreadable, keeping last good config", "path", s.path, "error", err)
-				}
-				readFailing = true
-				continue
+		if err != nil && hash == ([sha256.Size]byte{}) { // read failure: transient, retry
+			if !readFailing {
+				s.logger.Warn("config file unreadable, keeping last good config", "path", s.path, "error", err)
 			}
-			readFailing = false
-			if hash != s.lastHash {
-				s.lastHash = hash // remember bad content so it is logged once
-				s.logger.Error("config file invalid, keeping last good config", "path", s.path, "error", err)
-			}
+			readFailing = true
 			continue
 		}
 		readFailing = false
 		if hash == s.lastHash {
+			s.pendingHash = [sha256.Size]byte{} // content reverted; forget the blip
 			continue
 		}
-		s.lastHash = hash
+		// Debounce: an editor or ConfigMap update may be mid-write. Act only
+		// when two consecutive polls see identical content.
+		if hash != s.pendingHash {
+			s.pendingHash = hash
+			continue
+		}
+		s.pendingHash = [sha256.Size]byte{}
+		s.lastHash = hash // remember bad content so it is logged once
+		if err == nil && len(cfg.Routes) == 0 {
+			err = fmt.Errorf("parse %s: %w", s.path, errNoRoutes)
+		}
+		if err != nil {
+			s.logger.Error("config file invalid, keeping last good config", "path", s.path, "error", err)
+			continue
+		}
 		s.stamp(cfg)
 		replaceLatest(out, cfg)
 	}
