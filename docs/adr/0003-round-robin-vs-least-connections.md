@@ -27,8 +27,10 @@ When to choose which:
 | Situation | Pick |
 |---|---|
 | Identical instances, short and uniform requests (most JSON APIs) | `round_robin`: cheapest and perfectly even |
-| Variable request duration, streaming or long-polling, mixed instance sizes, a backend that sometimes slows down | `least_conn`: moves traffic away from the slow instance |
+| Variable request duration, streaming or long-polling, mixed instance sizes, a backend that sometimes slows down | `least_conn`: moves traffic away from the slow instance. Streaming and long-poll routes must **also** set a large explicit `timeouts.request` (for example `"1h"`); see below. |
 | Very many backends (hundreds) | P2C (future work) |
+
+**Streaming and long-poll routes need an explicit request timeout.** The balancer choice does not change how long a request may live. `timeouts.request` is a hard cap on the whole exchange, including streaming the response body, and it has **no "disabled" value** (0 means "inherit", and the built-in default is 30 s). Unbounded requests are a resource-exhaustion risk: each one pins a goroutine, an upstream connection, a least-connections slot and an old snapshot. So a route that streams or long-polls must set a large explicit value, such as `timeouts: {request: "1h"}`. Otherwise its streams are cut at 30 s with a 504 or a truncated body.
 
 ## Consequences
 

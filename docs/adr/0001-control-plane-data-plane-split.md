@@ -31,7 +31,7 @@ Option 3.
 | Postgres: append-only table of full config versions | Active and passive health checking |
 | Validation at write time (shared `internal/config`) | Consul watcher (ADR 0007) |
 | SSE stream endpoint `/v1/config/stream` | `ConfigSource` client (file or SSE), atomic snapshot swap (ADR 0002) |
-| | `/metrics`, `/healthz`, `/readyz` |
+| | `/metrics`, `/healthz`, `/readyz`, served only on the separate admin listener (`-admin-listen`), never on the traffic port |
 
 Both binaries use the same `internal/config` structs and the same `Validate`, so "valid" means exactly the same thing on both sides.
 
@@ -39,8 +39,10 @@ Both binaries use the same `internal/config` structs and the same `Validate`, so
 
 1. The data plane never calls the control plane on the request path.
 2. If the control plane goes down, the data plane keeps serving its last-known-good snapshot from memory. The SSE client reconnects with backoff, and a `config_stream_connected` gauge drops to 0 so someone gets alerted.
-3. If the data plane restarts while the control plane is down, it uses the on-disk copy of the last valid config. The SSE client writes that copy atomically (write a temp file, then rename) every time it accepts a new version. If there is neither a cached copy nor a control plane, the gateway starts but is not ready: `/readyz` fails and requests get 503 until a config arrives.
-4. Config is validated twice. The control plane rejects bad input with 400. The data plane validates again as defence in depth: an invalid pushed config is logged and ignored, never applied.
+3. If the data plane restarts while the control plane is down, it uses the on-disk copy of the last **applied** config. The SSE client writes that copy atomically (write a temp file, then rename) only after the gateway reports that it built and swapped in that version (`config.Acknowledger.Applied`, see ADR 0005). A version that passes validation but fails the snapshot build is never written to disk. On startup, a cached copy that fails to parse, validate or build is logged and ignored, and the gateway waits for the stream. If there is neither a usable cached copy nor a control plane, the gateway starts but is not ready: `/readyz` fails and requests get 503 until a config arrives.
+4. Config is validated twice. The control plane rejects bad input with 400. The data plane validates again as defence in depth: an invalid pushed config is logged and ignored, never applied. A config that validates but fails the snapshot build (for example a missing JWT key file) is also kept out: the old snapshot stays, and the source is told `Rejected`.
+
+**Security between the planes (v1).** The stream requires a read-only data-plane bearer token, and every other `/v1/*` endpoint requires the admin token (details in ADR 0005). **TLS between the planes is out of scope for v1**: tokens and configs travel in clear text inside the cluster network. Configs contain only key hashes and the *names* of secret-bearing env vars and files, never secrets, which limits what an eavesdropper learns, but a sniffed admin token allows config writes. Until mTLS is added (future work), the admin API must only be reachable from inside the cluster (no public Service or Ingress).
 
 The data plane does not know or care where its config comes from. It consumes a `config.ConfigSource`, and `FileSource` and `RemoteSource` both implement it.
 
