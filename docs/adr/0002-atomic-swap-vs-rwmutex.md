@@ -1,0 +1,51 @@
+# ADR 0002: Hot reload with an atomically swapped immutable snapshot
+
+Status: Accepted (Phase 0)
+
+## Context
+
+Every request reads the config: it needs the route table, the upstream's balancer, the auth policy, the rate limit and the timeouts. Config changes happen rarely (a control-plane publish, a Consul membership change, a YAML edit), but they must apply without a restart and without failing any in-flight request. Reads outnumber writes by roughly a million to one, and the read path is the gateway's hot path.
+
+Some state is not config. It is runtime state that has to keep its value across a reload:
+
+- backend health (active up/down, passive ejection deadline, failure counter),
+- per-backend in-flight request counts (least-connections depends on them),
+- rate-limit buckets,
+- pooled upstream TCP connections.
+
+## Options considered
+
+1. **A `sync.RWMutex` around a mutable config struct.** Familiar. But each request does `RLock`, which is an atomic write to a shared counter, so the cache line bounces between cores under load. The bigger problem is the critical section. If a request holds the read lock for its whole lifetime (possibly seconds), a writer waits behind every slow request, and new readers queue behind the waiting writer, so the reload stalls traffic. If a request holds it only for the lookup, it then uses objects that a writer may change mid-request, so you end up copying anyway.
+2. **An `atomic.Pointer[Snapshot]` to an immutable snapshot (copy-on-write).** (chosen) Readers do one atomic load and get a consistent view for the whole request. The writer builds a complete new snapshot off to the side, then publishes it with one `Store`. The cost is rebuilding the whole snapshot on every change, which is O(config size), and the discipline that a published snapshot is never mutated.
+3. **Restart or re-exec the process with socket hand-off (SO_REUSEPORT, nginx-style).** No in-process sharing at all. But it drops all runtime state (health, buckets, connection pools), is slow, and is complex to do correctly in Go.
+4. **Fine-grained mutation**: a `sync.Map` of routes, per-upstream locks, incremental diffs. Lower rebuild cost, but a request can see half of an update (a new route pointing at an upstream that has not been added yet), and the locking is hard to reason about.
+
+`atomic.Value` would also work for option 2. `atomic.Pointer[T]` (Go 1.19+) is the type-safe version and needs no type assertions.
+
+## Decision
+
+Option 2. The gateway keeps `atomic.Pointer[proxy.Snapshot]`.
+
+- **Request path:** `s := snap.Load()` once at the start of the request. Everything for that request comes from `s`. The request never reloads mid-flight.
+- **Swap path:** one goroutine, the reconcile loop, does all builds and swaps. Because there is only one writer, a plain `Store` is enough, with no compare-and-swap. It builds from (latest config, latest Consul endpoints) and then calls `Store`. If the build fails, the old snapshot stays.
+- **Old snapshots** are never closed or freed by hand. In-flight requests hold a pointer, and the garbage collector reclaims the snapshot after the last one finishes. This works only because of the next rule.
+- **A Snapshot owns no goroutines and no resources that need closing.** It is plain data plus pointers to long-lived objects. Everything stateful lives outside it and is carried across swaps:
+
+| Runtime state | Where it lives | How it survives a swap |
+|---|---|---|
+| Health, ejection, in-flight | `*balancer.Backend` atomics | A long-lived `balancer.Registry` returns the **same pointer** for the same backend ID (`upstream|url`). Removed IDs are pruned from the Registry after the swap. Old requests still finish on their pointer. |
+| Balancer cursor | Inside the per-snapshot `Balancer` | Not carried over. Round-robin restarts at a random offset, which is harmless. |
+| Rate-limit buckets | The process-wide `ratelimit.TokenBucket` | Not in the snapshot at all. The route's `Limit` is passed on every `Allow` call, so a new rate applies at the next request with no migration. |
+| Connection pools | A transport pool keyed by (dial timeout, response-header timeout) | Reused across swaps, so a reload does not throw away warm connections. Idle connections to removed backends expire through `IdleConnTimeout`. |
+| Probe goroutines | `health.Checker` | After each swap, the reconcile loop calls `Sync(targets)`, which starts probes for new backend IDs and stops probes for removed ones. |
+
+**Backend is a concrete struct with atomic fields, not an interface.** The alternative was a `Backend` interface (`Healthy()`, `InFlight()`, ...). That is easy to fake in tests, but every call goes through dynamic dispatch, and nothing would make two snapshots share the *same* state object. The struct pointer is the identity that the Registry hands out, and the Registry is what makes state survive. Tests can construct real `*Backend` values directly, so no fake is needed.
+
+## Consequences
+
+- Good: the read path is lock-free and does not contend with other requests. Reloads never block requests, and requests never block reloads.
+- Good: each request sees one consistent config version from start to finish, which makes "zero dropped requests during hot reload" easy to argue for (and Phase 8 measures it).
+- Good: rollback is just another swap.
+- Cost: every change rebuilds the whole snapshot. That takes microseconds to milliseconds for hundreds of routes, so it is fine at this scale. At 100k routes you would want incremental structures.
+- Cost: immutability is a convention, not something the compiler enforces. A data race on a snapshot field would be a bug. `go test -race`, plus the rule that only the builder writes snapshot fields, are the guards.
+- Cost: an old snapshot can stay in memory for as long as the slowest in-flight request (up to the request timeout). This is bounded and small.
