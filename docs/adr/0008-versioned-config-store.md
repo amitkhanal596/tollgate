@@ -121,7 +121,7 @@ SELECT version, created_at, author, comment, rolled_back_from
 No migration library (not an allowed dependency). Instead:
 
 - SQL files live in `internal/controlplane/migrations/NNNN_name.sql` and are compiled in with `//go:embed migrations/*.sql`. `NNNN` is the migration version; files are applied in ascending order. Files are **forward-only and immutable** once released: a change is always a new file.
-- `controlplane.Migrate(ctx, pool) error` runs at control-plane startup, before the listener opens, in **one transaction**:
+- `controlplane.Migrate(ctx, pool) error` runs at control-plane startup, before the listener opens: `NewPostgresStore(ctx, pool) (*PostgresStore, error)` calls it, and `cmd/controlplane` bounds pool creation plus migration with a **10 s startup timeout**, so an unreachable database fails fast. It runs in **one transaction**:
   1. `SELECT pg_advisory_xact_lock($1)` with `$1 = int64(0x746f6c6c6d696772)` (bound from a Go constant, never a hand-typed decimal), so two control planes starting together cannot both migrate.
   2. `CREATE TABLE IF NOT EXISTS schema_migrations (version INT PRIMARY KEY, name TEXT NOT NULL, sha256 TEXT NOT NULL, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())`.
   3. Read the applied rows. For each embedded file in order: if recorded, its SHA-256 must equal the recorded one (else fail: someone edited a released migration); if not recorded, `Exec` it and insert its row. If the database records a version the binary does not embed, fail ("database schema is newer than this binary").

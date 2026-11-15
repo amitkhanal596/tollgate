@@ -1,6 +1,6 @@
 # ADR 0003: Round-robin and least-connections, selectable per upstream
 
-Status: Accepted (Phase 0)
+Status: Accepted (Phase 0; least-connections tie-break amended in the Phase 2 fix round)
 
 ## Context
 
@@ -18,8 +18,9 @@ Each upstream has several backend instances, and for every request the gateway m
 Implement **both RR and LC** behind the `balancer.Balancer` interface, chosen per upstream with `algorithm: round_robin | least_conn`. The default is `round_robin`.
 
 - **Interface:** `Next() (*Backend, error)` increments the chosen backend's in-flight count. `Done(*Backend)` decrements it. Both algorithms track in-flight counts, so metrics and graceful drain work the same regardless of the algorithm.
-- **RR:** an `atomic.Uint64` cursor. It skips unavailable backends and tries at most N positions before returning `ErrNoHealthyBackends`. The cursor starts at a random offset so that a fleet of gateways does not all hit backend 0 right after a reload.
-- **LC:** a full scan of the backends, reading the atomics without a lock. The scan starts at a rotating offset, so ties are spread round-robin. Without that, at low load every request would go to `backends[0]`. Two concurrent picks can choose the same backend. That is benign, and both increments are counted.
+- **RR:** an `atomic.Uint64` cursor. It skips unavailable backends and tries at most N positions before returning `ErrNoHealthyBackends`. When a pick skips `i` unavailable positions, the cursor is advanced by `i` as well; otherwise the backend right after a down one would get its own turn plus the down one's (2/N instead of 1/(N-1)). The cursor starts at a random offset so that a fleet of gateways does not all hit backend 0 right after a reload.
+- **LC:** two lock-free passes over the backends, no allocation. Pass 1 finds the minimum in-flight count among available backends and the size `k` of the **tied set** at that minimum. Pass 2 returns the `(ties mod k)`-th tied backend, where `ties` is a rotating atomic counter (random start). With a stable tied set, every tied backend gets exactly 1/k of the picks. The first version rotated the scan *start* over all N backends and kept the first minimum it saw. That is wrong whenever a backend is excluded (down, ejected or busier): a start that lands on the excluded backend falls through to the next tied one, which then wins its own start position **and** the excluded one's. With `[down, A, B]`, A won starts 0 and 1 and B only start 2, a 2:1 split (3000 picks went 2000/1000). Rotating over the tied set removes the skew.
+- **LC pick/increment race (accepted):** the scan reads each counter atomically, then increments the winner. Two concurrent calls can read the same minimum and both pick the same backend. No CAS loop, because: both increments are counted, so `Next`/`Done` accounting stays exact and only the *choice* is momentarily suboptimal; the skew is bounded by the number of simultaneous pickers and self-corrects on the next scan; and a CAS on "count == min" would retry under exactly the contention it is meant to fix, for counts that change again microseconds later.
 - **Shared state:** in-flight counts live on the shared `*Backend` (ADR 0002), so LC's view stays accurate across config swaps.
 
 When to choose which:
@@ -35,7 +36,8 @@ When to choose which:
 ## Consequences
 
 - Good: the choice is a one-line config change, so the benchmark in Phase 8 can compare both on a deliberately slow backend. That is a great demo.
-- Good: both algorithms are about 40 lines each, lock-free, and testable with an injected clock and real `*Backend` values.
+- Good: both algorithms are about 40 to 60 lines each, lock-free, and testable with an injected clock and real `*Backend` values.
+- Cost: LC does two passes per pick when there is a tie (the common case at low load). At tens of backends that is negligible; at hundreds, P2C is the answer.
 - Cost: LC's correctness depends on `Done` being called exactly once. The proxy must `defer Done` right after a successful `Next`, and the reviewer checks this.
 - Cost: LC only sees this replica's in-flight requests. With R gateways, its picture of the fleet is partial. That is acceptable, because each replica still balances its own share.
 - Cost: on its own, LC favours fast-failing backends. Passive ejection must be enabled on `least_conn` upstreams that matter (the docs will recommend it).
