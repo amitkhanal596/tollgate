@@ -51,7 +51,18 @@ func (g *Gateway) admit(w http.ResponseWriter, r *http.Request, route *routeRT, 
 			// Only wrong credentials cost a token: missing ones cost the
 			// gateway no crypto, and successes must never lock anyone out.
 			if errors.Is(err, auth.ErrInvalidCredentials) {
-				g.authLimiter.Allow(ipKey, authFailureLimit())
+				// Fail closed for FAILED attempts when the throttle is full
+				// and cannot track this IP: answering 401 would let a client
+				// with fresh addresses guess credentials unthrottled, and the
+				// 401-vs-200 difference is exactly the oracle it wants. 429
+				// reveals nothing about the verification result. Valid
+				// credentials never reach this branch, so legitimate clients
+				// from untracked IPs are unaffected.
+				if d := g.authLimiter.Allow(ipKey, authFailureLimit()); d.AtCapacity {
+					g.logger.Debug("failed-auth throttle at capacity", "request_id", st.requestID, "route", route.name)
+					writeTooManyRequests(w, d.RetryAfter, st.requestID)
+					return false
+				}
 			}
 			// Debug, not Info: a credential-guessing client would otherwise
 			// turn every attempt into a log line. The auth errors never
@@ -68,8 +79,15 @@ func (g *Gateway) admit(w http.ResponseWriter, r *http.Request, route *routeRT, 
 	}
 
 	if route.limit != nil {
+		// IP-keyed (anonymous) and authenticated identities live in separate
+		// limiters, so an anonymous flood from many addresses cannot fill
+		// the key table that authenticated clients need.
+		lim := g.limiter
+		if route.authn == nil {
+			lim = g.anonLimiter
+		}
 		// The NUL separator keeps (route, identity) pairs from colliding.
-		d := g.limiter.Allow(route.limitKeyPrefix+identity, *route.limit)
+		d := lim.Allow(route.limitKeyPrefix+identity, *route.limit)
 		if !d.Allowed {
 			setRateLimitHeaders(w.Header(), d)
 			g.logger.Debug("rate limited", "request_id", st.requestID, "route", route.name, "at_capacity", d.AtCapacity)

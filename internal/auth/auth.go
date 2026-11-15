@@ -50,7 +50,8 @@ var (
 	// ErrMissingCredentials: no API key header / no bearer token.
 	ErrMissingCredentials = errors.New("auth: missing credentials")
 	// ErrInvalidCredentials: unknown key, bad signature, expired token,
-	// wrong issuer or audience, or a missing, empty or non-string client-ID claim.
+	// wrong issuer or audience, or a missing, empty or non-string client-ID
+	// claim, or one that is longer than 256 bytes or has control bytes.
 	ErrInvalidCredentials = errors.New("auth: invalid credentials")
 )
 

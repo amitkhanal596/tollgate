@@ -17,11 +17,23 @@ type apiKeyAuth struct {
 }
 
 // NewAPIKey builds an API-key Authenticator from the configured key hashes.
-// Every SHA256 must be 64 hex characters and every ClientID non-empty; zero
-// keys is allowed and rejects every presented key as invalid.
+// Every SHA256 must be 64 hex characters and every ClientID non-empty and
+// header-safe (config.ValidClientID); zero keys is allowed and rejects every
+// presented key as invalid.
 func NewAPIKey(keys []config.APIKey) (Authenticator, error) {
 	m := make(map[[sha256.Size]byte]string, len(keys))
 	for i, k := range keys {
+		// The client ID is checked first, so the messages below only ever
+		// quote a valid one.
+		// An empty identity would merge unrelated clients into one rate-limit bucket.
+		if k.ClientID == "" {
+			return nil, fmt.Errorf("auth: api_keys[%d]: client_id is empty", i)
+		}
+		// The client ID becomes the X-Tollgate-Client-ID header and a log
+		// field, so it must be header-safe. Not echoed: it may hold CR/LF.
+		if !config.ValidClientID(k.ClientID) {
+			return nil, fmt.Errorf("auth: api_keys[%d]: client_id %s", i, config.ClientIDRule)
+		}
 		// Errors name the entry by index and client ID only: the hash is not
 		// secret, but there is no reason to echo key material into logs.
 		if len(k.SHA256) != hex.EncodedLen(sha256.Size) {
@@ -30,10 +42,6 @@ func NewAPIKey(keys []config.APIKey) (Authenticator, error) {
 		var d [sha256.Size]byte
 		if _, err := hex.Decode(d[:], []byte(k.SHA256)); err != nil {
 			return nil, fmt.Errorf("auth: api_keys[%d] (client %q): sha256 is not valid hex", i, k.ClientID)
-		}
-		// An empty identity would merge unrelated clients into one rate-limit bucket.
-		if k.ClientID == "" {
-			return nil, fmt.Errorf("auth: api_keys[%d]: client_id is empty", i)
 		}
 		// One key mapping to two clients would make the identity ambiguous.
 		if prev, dup := m[d]; dup {

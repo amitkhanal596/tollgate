@@ -115,6 +115,12 @@ func NewChecker(client *http.Client, now func() time.Time, onChange func(b *bala
 		// host are enough for one sequential probe per backend.
 		tr := http.DefaultTransport.(*http.Transport).Clone()
 		tr.MaxIdleConnsPerHost = 2
+		// Probe backends directly, like the data-plane transport does. The
+		// default transport honours HTTP(S)_PROXY, so in a pod with an egress
+		// proxy configured every probe would go through that proxy, which
+		// cannot reach in-cluster backends (or reports its own health): all
+		// backends would be marked down while real traffic works fine.
+		tr.Proxy = nil
 		c.ownsTran = tr
 		cp.Transport = tr
 	}
@@ -280,6 +286,15 @@ func (c *Checker) runProbe(ctx context.Context, b *balancer.Backend, p *probe, p
 		select {
 		case <-prev: // predecessor for this pointer has exited
 		case <-ctx.Done():
+			// Stopped before we even started. We must STILL wait for the
+			// predecessor before returning: our deferred reset-to-up would
+			// otherwise race its last verdict write, and a late "down" landing
+			// after the reset would leave a removed backend down forever.
+			// The wait is bounded: apply cancels a probe before handing its
+			// done channel to a successor (and Run's ctx cancels all of them),
+			// so the predecessor is already exiting; at worst it finishes
+			// aborting its in-flight request and runs onChange once.
+			<-prev
 			return
 		}
 	}

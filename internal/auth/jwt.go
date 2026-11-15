@@ -192,6 +192,13 @@ func (a *jwtAuth) Authenticate(r *http.Request) (Identity, error) {
 	if !ok || id == "" {
 		return Identity{}, fmt.Errorf("%w: client-ID claim %q missing, empty or not a string", ErrInvalidCredentials, a.clientClaim)
 	}
+	// The ID becomes the X-Tollgate-Client-ID upstream header: CR/LF would be
+	// header injection, and any control byte would make the transport refuse
+	// the request (a 502 blamed on a healthy backend). A fixed reason; the
+	// claim value is attacker-chosen and never echoed.
+	if !config.ValidClientID(id) {
+		return Identity{}, fmt.Errorf("%w: client-ID claim %q is too long or contains control characters", ErrInvalidCredentials, a.clientClaim)
+	}
 	return Identity{ClientID: id, Method: "jwt"}, nil
 }
 

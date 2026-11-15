@@ -50,6 +50,21 @@ func main() {
 // and 2 on bad flags. All output (logs and flag usage) goes to logOut, so
 // run touches no process-global state and tests can call it directly.
 func run(ctx context.Context, args []string, logOut io.Writer) int {
+	return runWithSource(ctx, args, logOut,
+		func(path string, poll time.Duration, logger *slog.Logger) config.ConfigSource {
+			return config.NewFileSource(path, poll, logger)
+		})
+}
+
+// errSourceEnded reports that the config stream closed while nobody had asked
+// the process to stop.
+var errSourceEnded = errors.New("config source closed its stream unexpectedly")
+
+// runWithSource is run with the ConfigSource built by newSource (from the
+// -config path and -config-poll interval) instead of always a FileSource. It
+// is the seam for testing how the process reacts to its source.
+func runWithSource(ctx context.Context, args []string, logOut io.Writer,
+	newSource func(path string, poll time.Duration, logger *slog.Logger) config.ConfigSource) int {
 	// A FlagSet local to run, never flag.CommandLine: no global state, and
 	// tests can call run repeatedly.
 	fs := flag.NewFlagSet("gateway", flag.ContinueOnError)
@@ -107,7 +122,7 @@ func run(ctx context.Context, args []string, logOut io.Writer) int {
 	defer stopBackground()
 
 	gw := proxy.New(proxy.Options{Logger: logger})
-	src := config.NewFileSource(*cfgPath, *poll, logger)
+	src := newSource(*cfgPath, *poll, logger)
 	var shuttingDown atomic.Bool
 
 	// Every goroutine reports at most one error, so a buffer of 3 means no
@@ -124,7 +139,21 @@ func run(ctx context.Context, args []string, logOut io.Writer) int {
 		}()
 	}
 
-	start(&background, "reconcile loop", func() error { return gw.Run(bgCtx, src) })
+	start(&background, "reconcile loop", func() error {
+		if err := gw.Run(bgCtx, src); err != nil {
+			return err
+		}
+		// Run also returns nil when the source closes its channel. If we did
+		// not cancel bgCtx, that was not a shutdown: the reconcile loop is
+		// gone, and with it the health checks and limiter sweepers, so the
+		// listeners would keep serving a frozen config with no health
+		// tracking. Report it as a failure so the main select shuts the
+		// process down in the normal order and exits non-zero.
+		if bgCtx.Err() == nil {
+			return errSourceEnded
+		}
+		return nil
+	})
 	start(&traffic, "traffic server", func() error {
 		return proxy.Serve(trafficCtx, trafficLn, gw, *drain, logger)
 	})

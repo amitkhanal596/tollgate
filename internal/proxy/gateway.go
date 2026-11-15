@@ -32,17 +32,27 @@ type Options struct {
 	Now func() time.Time
 
 	// Limiter enforces the per-route rate limits (route.rate_limit), keyed
-	// by route name + "\x00" + client identity. Nil makes the Gateway create
-	// its own ratelimit.TokenBucket (clock: Now), which Gateway.Run sweeps.
-	// An injected Limiter is used as-is: the caller owns it and runs any
-	// sweeper it needs; the Gateway never starts goroutines for it.
+	// by route name + "\x00" + client identity.
+	//
+	// Nil (production) makes the Gateway create TWO ratelimit.TokenBuckets
+	// (clock: Now, MaxKeys: LimiterMaxKeys), both swept by Gateway.Run: one
+	// for authenticated identities (api_key/jwt routes) and one for
+	// IP-keyed clients (auth: none routes). Kept apart so an anonymous flood
+	// from many addresses, which can fill a key table, can never leave
+	// authenticated clients without a slot (they would be denied with
+	// AtCapacity).
+	//
+	// An injected Limiter replaces BOTH of them (one instance serves both
+	// kinds of identity, so that isolation is then the caller's concern).
+	// It is used as-is: the caller owns it and runs any sweeper it needs;
+	// the Gateway never starts goroutines for it.
 	Limiter ratelimit.Limiter
 	// AuthLimiter is the failed-auth throttle (ADR 0004, architecture.md
 	// section 11 row 10): keyed by client-IP key, fixed policy burst 10,
 	// refill 1/s. It must be a different instance from Limiter, so an
-	// auth-failure flood cannot spend the route limiter's key budget. Nil
-	// makes the Gateway create and sweep its own, as for Limiter; an
-	// injected one is owned by the caller.
+	// auth-failure flood cannot spend the route limiters' key budget. Nil
+	// makes the Gateway create and sweep its own (clock: Now, MaxKeys:
+	// LimiterMaxKeys); an injected one is owned by the caller.
 	AuthLimiter ratelimit.Limiter
 	// Getenv resolves auth.jwt.hmac_secret_env when a snapshot is built.
 	// Nil uses os.Getenv.
@@ -55,6 +65,11 @@ type Options struct {
 	// Nil gives the Checker a private transport whose idle connections are
 	// closed when Run returns.
 	HealthClient *http.Client
+	// LimiterMaxKeys caps the buckets of EACH limiter the Gateway creates
+	// itself (the authenticated and the IP-keyed route limiters and the
+	// failed-auth throttle; injected limiters are not affected). 0 means
+	// ratelimit.DefaultMaxKeys.
+	LimiterMaxKeys int
 }
 
 // Failed-auth throttle policy (ADR 0004, architecture.md section 11 row 10).
@@ -74,7 +89,7 @@ func authFailureLimit() ratelimit.Limit {
 //
 // Long-lived state that must survive reloads lives here, outside the
 // snapshot: backend health and in-flight counts (Registry), pooled upstream
-// connections, the active health Checker, and both rate limiters (so a
+// connections, the active health Checker, and the rate limiters (so a
 // reload neither refills a throttled client's bucket nor ignores a changed
 // limit).
 type Gateway struct {
@@ -93,9 +108,13 @@ type Gateway struct {
 	// apply feeds it with Sync; Run owns its goroutine.
 	checker *health.Checker
 
-	// limiter and authLimiter are read on the request path. Both are safe
-	// for concurrent use and never replaced after New, so no lock is needed.
+	// The limiters are read on the request path. All are safe for
+	// concurrent use and never replaced after New, so no lock is needed.
+	// limiter holds authenticated identities, anonLimiter IP-keyed ones
+	// (auth: none); they are the same instance only if Options.Limiter was
+	// injected. authLimiter is the failed-auth throttle.
 	limiter     ratelimit.Limiter
+	anonLimiter ratelimit.Limiter
 	authLimiter ratelimit.Limiter
 	// sweepers are the limiters this Gateway created (not injected ones);
 	// Run runs their idle-bucket sweep for as long as it runs.
@@ -123,15 +142,20 @@ func New(opts Options) *Gateway {
 		registry:    balancer.NewRegistry(),
 		transports:  newTransportPool(),
 		limiter:     opts.Limiter,
+		anonLimiter: opts.Limiter,
 		authLimiter: opts.AuthLimiter,
 	}
-	if g.limiter == nil {
-		tb := ratelimit.NewTokenBucket(ratelimit.Options{Now: now})
-		g.limiter, g.sweepers = tb, append(g.sweepers, tb)
+	// own creates a limiter the Gateway owns: Run sweeps it.
+	own := func() *ratelimit.TokenBucket {
+		tb := ratelimit.NewTokenBucket(ratelimit.Options{Now: now, MaxKeys: opts.LimiterMaxKeys})
+		g.sweepers = append(g.sweepers, tb)
+		return tb
+	}
+	if opts.Limiter == nil {
+		g.limiter, g.anonLimiter = own(), own()
 	}
 	if g.authLimiter == nil {
-		tb := ratelimit.NewTokenBucket(ratelimit.Options{Now: now})
-		g.authLimiter, g.sweepers = tb, append(g.sweepers, tb)
+		g.authLimiter = own()
 	}
 	g.checker = health.NewChecker(opts.HealthClient, now, func(b *balancer.Backend, up bool) {
 		// Runs on the probe goroutine; logging is concurrency-safe and quick.

@@ -11,6 +11,7 @@ import (
 	"net/http/httputil"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/amitkhanal596/tollgate/internal/auth"
@@ -62,6 +63,20 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Requests the proxy could never forward are refused here, before the
+	// balancer, so they cannot take an in-flight slot or be blamed on a
+	// backend: ReverseProxy would hand both to its ErrorHandler, which used
+	// to make them 502s and passive-health strikes.
+	if r.Method == http.MethodConnect {
+		// We are a reverse proxy, not a forward (tunnelling) proxy.
+		writeError(w, http.StatusMethodNotAllowed, reqID)
+		return
+	}
+	if !validUpgradeHeader(r.Header) {
+		writeError(w, http.StatusBadRequest, reqID)
+		return
+	}
+
 	// Before routing: the router must only ever see paths that every
 	// upstream will interpret the same way (see checkPath).
 	if err := checkPath(r.URL); err != nil {
@@ -109,17 +124,31 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// The request timeout bounds the whole exchange including streaming
 	// the body. It derives from the client's context, so a client that
 	// disconnects also cancels the upstream request.
-	ctx, cancel := context.WithTimeout(r.Context(), route.timeouts.request)
+	deadlineCtx, cancel := context.WithTimeout(r.Context(), route.timeouts.request)
 	defer cancel()
-	ctx = context.WithValue(ctx, proxyStateKey{}, st)
-	route.proxy.ServeHTTP(w, r.WithContext(ctx))
+	out := r.WithContext(context.WithValue(deadlineCtx, proxyStateKey{}, st))
+	// Only a request that announces a body (Content-Length > 0, or chunked
+	// = -1) can stall or break mid-body; bodiless requests (most GETs) skip
+	// the wrapper and the deadline callback entirely.
+	if r.ContentLength != 0 && r.Body != nil && r.Body != http.NoBody {
+		st.hasBody, st.w = true, w
+		st.body.rc, st.body.ctx = r.Body, deadlineCtx
+		out.Body = &st.body // the inbound r is left untouched
+		// Runs only if the deadline fires mid-request (see onDeadline);
+		// finishBody runs before cancel (LIFO), so a normal finish never
+		// triggers it. Deferred, so it also runs on an ErrAbortHandler panic.
+		defer st.finishBody(context.AfterFunc(deadlineCtx, st.onDeadline))
+	}
+	route.proxy.ServeHTTP(w, out)
 }
 
 // proxyState is what the shared per-route ReverseProxy hooks need to know
 // about the current request. It travels in the request context because one
-// ReverseProxy serves many concurrent requests. It is only ever touched by
-// the goroutine serving the request (ReverseProxy calls Rewrite,
-// ModifyResponse and ErrorHandler on it), so it needs no synchronisation.
+// ReverseProxy serves many concurrent requests. Its plain fields are only
+// touched by the goroutine serving the request (ReverseProxy calls Rewrite,
+// RoundTrip, ModifyResponse and ErrorHandler on it), so they need no
+// synchronisation. The exceptions are body (read by the transport's write
+// goroutine; atomic fields) and finished (shared with onDeadline; mu).
 type proxyState struct {
 	backend   *balancer.Backend
 	requestID string
@@ -131,9 +160,24 @@ type proxyState struct {
 	rl      ratelimit.Decision
 	limited bool
 	// observed is set once the attempt's outcome has gone to passive
-	// health, so an upgrade failure after ModifyResponse is not counted
-	// a second time.
+	// health, so it is never counted twice.
 	observed bool
+	// failStatus is the status observingTransport chose for a failed
+	// RoundTrip (0 if RoundTrip did not fail); ErrorHandler writes it.
+	failStatus int
+
+	// hasBody marks a request whose body is wrapped in body. w is the
+	// client ResponseWriter, used only by onDeadline to unblock a stalled
+	// read; set before body is shared.
+	hasBody bool
+	w       http.ResponseWriter
+	body    reqBody
+	// mu guards finished. A plain mutex, not an atomic: onDeadline must
+	// finish its SetReadDeadline before the handler returns, and finishBody
+	// waits for it by taking the lock. It is per request and contended
+	// only on the rare deadline path.
+	mu       sync.Mutex
+	finished bool
 }
 
 type proxyStateKey struct{}
@@ -165,8 +209,9 @@ type routeHooks struct {
 func (bd *builder) newRouteProxy(route string, transport http.RoundTripper, passive *config.PassiveHealth) *httputil.ReverseProxy {
 	h := &routeHooks{route: route, passive: passive, now: bd.now, logger: bd.logger}
 	return &httputil.ReverseProxy{
-		Rewrite:   rewrite,
-		Transport: transport,
+		Rewrite: rewrite,
+		// The wrapper is where passive health learns each attempt's outcome.
+		Transport: &observingTransport{next: transport, hooks: h},
 		// -1 flushes after every write to the client, so streamed
 		// responses (SSE, long polls, chunked progress output) are not
 		// held back in a buffer. Large copies bypass the buffer anyway, so
@@ -194,9 +239,7 @@ func (h *routeHooks) modifyResponse(resp *http.Response) error {
 	// gets exactly one request ID and our own rate-limit numbers.
 	resp.Header.Set(HeaderRequestID, st.requestID)
 	st.setRateLimitHeaders(resp.Header)
-	// Step 6: the outcome is taken at header time. A later body-copy error
-	// is not reported (ADR 0006).
-	h.observe(st, resp.StatusCode, nil)
+	// Step 6 (passive health) already ran in observingTransport.
 	return nil
 }
 
@@ -269,13 +312,22 @@ func stripHeaders(h http.Header, names ...string) {
 	}
 }
 
-// handleError maps transport failures to a status (docs/architecture.md
-// section 8) and reports them to passive health. It runs only before any
-// response bytes have been written; a failure while streaming the body
-// makes ReverseProxy abort the connection instead, and is never reported.
+// handleError writes the error response for a failed attempt
+// (docs/architecture.md section 8). It never reports to passive health:
+// failed RoundTrips were already classified and reported by
+// observingTransport, and every other call (a broken protocol upgrade after
+// a 101 that was already counted) says nothing new about the backend. It
+// runs only before any response bytes have been written; a failure while
+// streaming the body makes ReverseProxy abort the connection instead.
 func (h *routeHooks) handleError(w http.ResponseWriter, r *http.Request, err error) {
-	status := classifyProxyError(r.Context(), err)
 	st := stateFrom(r.Context())
+	var status int
+	if st != nil {
+		status = st.failStatus
+	}
+	if status == 0 {
+		status = classifyProxyError(r.Context(), err)
+	}
 	attrs := []any{"route", h.route, "status", status, "err", err}
 	var reqID string
 	if st != nil {
@@ -293,10 +345,16 @@ func (h *routeHooks) handleError(w http.ResponseWriter, r *http.Request, err err
 		writeError(w, status, reqID)
 		return
 	}
-	// Our own deadline (504), dial failures and resets (502) all say
-	// something about the backend.
-	if st != nil {
-		h.observe(st, status, err)
+	if status == http.StatusRequestTimeout || status == http.StatusBadRequest {
+		// The client's request body stalled (408) or was broken (400). The
+		// connection's framing is unusable now (unread or malformed body,
+		// and for 408 a read deadline in the past), so tell the client and
+		// net/http to close it after this response.
+		h.logger.Info("client request body failed", attrs...)
+		w.Header().Set("Connection", "close")
+		st.setRateLimitHeaders(w.Header())
+		writeError(w, status, reqID)
+		return
 	}
 	h.logger.Warn("upstream request failed", attrs...)
 	st.setRateLimitHeaders(w.Header())

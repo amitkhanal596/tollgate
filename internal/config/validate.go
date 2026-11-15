@@ -77,11 +77,13 @@ func (c *Config) Validate() error {
 		}
 
 		if rl := r.RateLimit; rl != nil {
-			if !(rl.RequestsPerSecond > 0) { // also rejects NaN
-				bad("%s.rate_limit.requests_per_second must be > 0", where)
+			// "> 0 && <= max" also rejects NaN and +Inf: every comparison
+			// with NaN is false, and +Inf is above the bound.
+			if !(rl.RequestsPerSecond > 0 && rl.RequestsPerSecond <= MaxRateLimit) {
+				bad("%s.rate_limit.requests_per_second must be > 0 and <= %d", where, MaxRateLimit)
 			}
-			if rl.Burst < 1 {
-				bad("%s.rate_limit.burst must be >= 1", where)
+			if rl.Burst < 1 || rl.Burst > MaxRateLimit {
+				bad("%s.rate_limit.burst must be >= 1 and <= %d", where, MaxRateLimit)
 			}
 		}
 		validateTimeouts(where+".timeouts", r.Timeouts, bad)
@@ -99,6 +101,9 @@ func (c *Config) Validate() error {
 		where := fmt.Sprintf("auth.api_keys[%d]", i)
 		if k.ClientID == "" {
 			bad("%s.client_id must not be empty", where)
+		} else if !ValidClientID(k.ClientID) {
+			// The value is not echoed: it may hold control bytes or be huge.
+			bad("%s.client_id %s", where, ClientIDRule)
 		} else if clients[k.ClientID] {
 			bad("%s.client_id %q is duplicated", where, k.ClientID)
 		}
@@ -116,6 +121,41 @@ func (c *Config) Validate() error {
 	}
 
 	return errors.Join(errs...)
+}
+
+// MaxRateLimit bounds rate_limit.burst and rate_limit.requests_per_second.
+// The limiter keeps tokens as float64 nanotokens (tokens * 1e9): a burst
+// near MaxInt is far beyond float64's exact-integer range, so the token
+// arithmetic loses whole tokens and the int conversion behind
+// X-RateLimit-Remaining overflows into nonsense. No real per-client limit is
+// anywhere near a million per second, and at 1e6 * 1e9 = 1e15 the math is
+// still exact (float64 is exact up to 2^53, about 9e15).
+const MaxRateLimit = 1_000_000
+
+// MaxClientIDLen bounds a client ID in bytes (API key client_id or JWT
+// client-ID claim).
+const MaxClientIDLen = 256
+
+// ClientIDRule describes ValidClientID for error messages.
+const ClientIDRule = "must be at most 256 bytes with no control characters"
+
+// ValidClientID reports whether s is usable as a client identity: non-empty,
+// at most MaxClientIDLen bytes, and free of ASCII control bytes (< 0x20 and
+// 0x7f). The ID becomes the X-Tollgate-Client-ID upstream header, a
+// rate-limit key and a log field, so CR/LF/NUL would be header injection
+// (or a transport error that looks like a backend failure). Bytes >= 0x80
+// are allowed, so UTF-8 names stay valid. It lives in config (not auth) so
+// that Validate and the auth package enforce one shared rule.
+func ValidClientID(s string) bool {
+	if s == "" || len(s) > MaxClientIDLen {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c < 0x20 || c == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 // maxNameLen bounds route and upstream names, which appear in admin API
