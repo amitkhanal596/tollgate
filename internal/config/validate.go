@@ -24,6 +24,8 @@ func (c *Config) Validate() error {
 		where := fmt.Sprintf("upstreams[%d]", i)
 		if u.Name == "" {
 			bad("%s.name must not be empty", where)
+		} else if !validName(u.Name) {
+			bad("%s.name %q %s", where, u.Name, nameRule)
 		} else if upstreams[u.Name] {
 			bad("%s.name %q is duplicated", where, u.Name)
 		}
@@ -39,6 +41,8 @@ func (c *Config) Validate() error {
 		where := fmt.Sprintf("routes[%d]", i)
 		if r.Name == "" {
 			bad("%s.name must not be empty", where)
+		} else if !validName(r.Name) {
+			bad("%s.name %q %s", where, r.Name, nameRule)
 		} else if routeNames[r.Name] {
 			bad("%s.name %q is duplicated", where, r.Name)
 		}
@@ -112,6 +116,32 @@ func (c *Config) Validate() error {
 	}
 
 	return errors.Join(errs...)
+}
+
+// maxNameLen bounds route and upstream names, which appear in admin API
+// paths, metric labels and logs.
+const maxNameLen = 64
+
+const nameRule = "must be 1-64 characters of A-Z, a-z, 0-9, '.', '_' or '-'"
+
+// validName reports whether s matches [A-Za-z0-9._-]{1,64}. Names are a
+// single admin API path segment (/v1/routes/{name}), so "/" would make an
+// object unaddressable, and spaces or "%" would make URLs ambiguous.
+func validName(s string) bool {
+	if len(s) == 0 || len(s) > maxNameLen {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if !isNameByte(s[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// isNameByte is the byte class [A-Za-z0-9._-] shared by names and node IDs.
+func isNameByte(c byte) bool {
+	return 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '.' || c == '_' || c == '-'
 }
 
 func validateTimeouts(where string, t Timeouts, bad func(string, ...any)) {

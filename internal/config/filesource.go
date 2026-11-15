@@ -148,16 +148,17 @@ func (s *FileSource) run(ctx context.Context, out chan *Config) {
 // value if needed. It is safe only because the caller is the sole sender:
 // after draining, the buffer cannot be refilled by anyone else, so the next
 // send cannot block and the newest value is never lost. The caller must not
-// touch cfg afterwards.
-func replaceLatest(out chan *Config, cfg *Config) {
+// touch cfg afterwards. It returns the stale value it dropped (nil if none),
+// which the consumer is now guaranteed never to receive.
+func replaceLatest(out chan *Config, cfg *Config) (dropped *Config) {
 	for {
 		select {
 		case out <- cfg:
-			return
+			return dropped
 		default:
 		}
 		select {
-		case <-out: // drop the stale value (the consumer may have just taken it)
+		case dropped = <-out: // drop the stale value (the consumer may have just taken it)
 		default:
 		}
 	}

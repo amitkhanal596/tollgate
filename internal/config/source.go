@@ -17,7 +17,8 @@ var ErrAlreadyWatching = errors.New("config: source is already being watched")
 //     an allowed dependency, and hashing also handles Kubernetes ConfigMap
 //     symlink swaps where mtime is unreliable).
 //   - RemoteSource (Phase 4): subscribes to the control plane's SSE stream
-//     (ADR 0005) and keeps a last-known-good copy on local disk.
+//     (ADR 0005) and keeps a copy of the last APPLIED config on local disk
+//     (it implements Acknowledger, see ack.go).
 //   - Static/fake sources in tests.
 //
 // Semantics of Watch, which every implementation must follow:
@@ -33,7 +34,8 @@ var ErrAlreadyWatching = errors.New("config: source is already being watched")
 //
 //  3. Initial config. The first value sent is the current config as soon as
 //     the source has one. FileSource sends it immediately. RemoteSource
-//     sends the on-disk last-known-good copy if present, then the control
+//     sends the on-disk copy of the last APPLIED config if present (written
+//     only after the gateway acknowledged it with Applied), then the control
 //     plane's latest version once connected. Until the first value arrives
 //     the gateway is not ready (503, /readyz fails).
 //

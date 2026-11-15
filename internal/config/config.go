@@ -26,15 +26,17 @@
 //	func (c *Config) Normalize()
 //	// Validate returns nil or an error joining (errors.Join) one error per
 //	// problem, each wrapping ErrInvalid. Rules:
-//	//   - route names non-empty and unique; host has no port; path_prefix is
-//	//     a clean literal path (starts with "/", no percent-escapes, ";",
+//	//   - route names unique and matching [A-Za-z0-9._-]{1,64} (a name is
+//	//     one admin API path segment, so "/" would make it unaddressable);
+//	//     host has no port; path_prefix is a clean literal path
+//	//     (starts with "/", no percent-escapes, ";",
 //	//     "//", "." or ".." segments, backslashes or control characters);
 //	//     the (host, path_prefix) pair is unique; upstream exists;
 //	//     auth is none|api_key|jwt; api_key needs >= 1 Auth.APIKeys entry;
 //	//     jwt needs Auth.JWT; rate_limit has requests_per_second > 0 and
 //	//     burst >= 1; timeouts >= 0.
-//	//   - upstream names non-empty and unique; exactly one of backends /
-//	//     consul is set; each backend is an absolute http(s) URL with a
+//	//   - upstream names unique and matching [A-Za-z0-9._-]{1,64}; exactly
+//	//     one of backends / consul is set; each backend is an absolute http(s) URL with a
 //	//     host and no path, unique within the upstream after
 //	//     canonicalisation; algorithm is round_robin|least_conn; health
 //	//     thresholds >= 1; 0 < timeout < interval.
