@@ -1,14 +1,18 @@
 package controlplane
 
 import (
+	"slices"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/amitkhanal596/tollgate/internal/config"
 )
 
-// This file is the Phase 4 CONTRACT for Hub and Nodes. The method bodies
-// are placeholders: the builder replaces each panic with an implementation
-// and adds the struct fields, keeping every signature and doc comment.
+// Lock ordering: Hub.mu and Nodes.mu are independent leaf locks. Neither type
+// calls the other, and no method calls out (no I/O, no callbacks, no blocking
+// channel operation) while holding its lock, so the two can never be held
+// together and there is no ordering to get wrong.
 
 // Hub fans committed configs out to SSE stream handlers (ADR 0005,
 // architecture §11 row 5). It is in-memory, so it serves one control-plane
@@ -34,14 +38,45 @@ import (
 // Values are shared *config.Config pointers: the hub and every subscriber
 // treat them as immutable.
 //
-// Planned fields (builder): mu sync.Mutex; max *config.Config;
-// subs map[*subscription]struct{} (or map[chan *config.Config]struct{});
-// closed bool.
-type Hub struct{}
+// Why a mutex and not atomics: Publish must do "compare with max, raise
+// max, replace every slot" as one step, Subscribe must do "register, prime
+// with max" as one step (otherwise a publish between the two is lost), and
+// close(ch) must never race a send on ch. No single atomic word covers that,
+// and the path is not hot (one Publish per admin write, one Subscribe per
+// stream connection), so a plain mutex is the clear choice.
+type Hub struct {
+	mu     sync.Mutex
+	max    *config.Config             // highest version ever accepted; nil before the first
+	subs   map[*subscription]struct{} // open subscriptions; nil after Close
+	closed bool
+}
+
+// subscription is one subscriber's slot. ch is closed exactly once, by
+// cancel or Close, and only while holding Hub.mu; done records that so the
+// other path skips it.
+type subscription struct {
+	ch   chan *config.Config
+	done bool // guarded by Hub.mu
+}
+
+// offer replaces the slot's content with cfg. The caller holds Hub.mu, so it
+// is the only sender: after the non-blocking drain the buffer has room (a
+// concurrent receiver can only make more room), so the send cannot block.
+// The default branch is defence in depth, never expected to run.
+func (s *subscription) offer(cfg *config.Config) {
+	select {
+	case <-s.ch:
+	default:
+	}
+	select {
+	case s.ch <- cfg:
+	default:
+	}
+}
 
 // NewHub returns an open Hub with no subscribers and no max.
 func NewHub() *Hub {
-	panic("controlplane: NewHub not implemented (Phase 4)")
+	return &Hub{subs: make(map[*subscription]struct{})}
 }
 
 // Publish offers cfg to every current subscriber.
@@ -53,7 +88,21 @@ func NewHub() *Hub {
 //
 // The caller must not modify cfg afterwards.
 func (h *Hub) Publish(cfg *config.Config) {
-	panic("controlplane: Hub.Publish not implemented (Phase 4)")
+	if cfg == nil {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	// Dropping <= max is what makes out-of-order publishes safe (§11 row 5):
+	// every value ever placed in a slot is strictly newer than all earlier
+	// ones, so "replace" is the same as "highest version wins".
+	if h.closed || (h.max != nil && cfg.Version <= h.max.Version) {
+		return
+	}
+	h.max = cfg
+	for s := range h.subs {
+		s.offer(cfg)
+	}
 }
 
 // Subscribe registers a subscriber and returns its receive channel and a
@@ -74,7 +123,33 @@ func (h *Hub) Publish(cfg *config.Config) {
 //   - After Close, Subscribe returns an already-closed channel and a no-op
 //     cancel.
 func (h *Hub) Subscribe() (ch <-chan *config.Config, cancel func()) {
-	panic("controlplane: Hub.Subscribe not implemented (Phase 4)")
+	s := &subscription{ch: make(chan *config.Config, 1)}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed {
+		close(s.ch)
+		return s.ch, func() {}
+	}
+	h.subs[s] = struct{}{}
+	// Priming under the same lock as registration: a concurrent Publish
+	// either ran before (its cfg is max, primed here) or runs after (it sees
+	// s in subs). Nothing can fall between.
+	if h.max != nil {
+		s.offer(h.max)
+	}
+	return s.ch, func() { h.cancel(s) }
+}
+
+// cancel removes s and closes its channel unless Close already did.
+func (h *Hub) cancel(s *subscription) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if s.done {
+		return
+	}
+	s.done = true
+	delete(h.subs, s)
+	close(s.ch)
 }
 
 // Close closes every subscriber channel and makes later Publish calls
@@ -84,7 +159,18 @@ func (h *Hub) Subscribe() (ch <-chan *config.Config, cancel func()) {
 // every SSE handler returns when Shutdown begins; otherwise Shutdown would
 // wait forever for stream connections that never go idle.
 func (h *Hub) Close() {
-	panic("controlplane: Hub.Close not implemented (Phase 4)")
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed {
+		return
+	}
+	h.closed = true
+	for s := range h.subs {
+		s.done = true
+		close(s.ch)
+	}
+	h.subs = nil
+	h.max = nil // nothing can read it any more; let the config be collected
 }
 
 // DefaultNodeTTL is how long a disconnected data plane stays listed in
@@ -131,15 +217,44 @@ type NodeStatus struct {
 // Eviction is lazy (no goroutine): List drops entries that are not
 // connected and whose LastSeen is older than the TTL.
 //
-// Planned fields (builder): mu sync.Mutex; now func() time.Time;
-// ttl time.Duration; nodes map[string]*nodeEntry (NodeStatus plus an open
-// connection count).
-type Nodes struct{}
+// Why a mutex: every method is a read-modify-write of several fields of one
+// entry (and List also deletes), the registry is touched a few times per
+// stream connection and heartbeat, never per proxied request, so a single
+// short-held mutex is simpler than per-field atomics and plenty fast.
+type Nodes struct {
+	mu    sync.Mutex
+	now   func() time.Time
+	ttl   time.Duration
+	nodes map[string]*nodeEntry
+}
+
+// nodeEntry is a NodeStatus plus the number of open stream connections.
+// status.Connected is derived from conns when copied out.
+type nodeEntry struct {
+	status NodeStatus
+	conns  int
+}
 
 // NewNodes returns an empty registry. A nil now uses time.Now; ttl <= 0
 // uses DefaultNodeTTL.
 func NewNodes(now func() time.Time, ttl time.Duration) *Nodes {
-	panic("controlplane: NewNodes not implemented (Phase 4)")
+	if now == nil {
+		now = time.Now
+	}
+	if ttl <= 0 {
+		ttl = DefaultNodeTTL
+	}
+	return &Nodes{now: now, ttl: ttl, nodes: make(map[string]*nodeEntry)}
+}
+
+// entry returns node's entry, creating it if needed. Caller holds n.mu.
+func (n *Nodes) entry(node string) *nodeEntry {
+	e, ok := n.nodes[node]
+	if !ok {
+		e = &nodeEntry{status: NodeStatus{Node: node}}
+		n.nodes[node] = e
+	}
+	return e
 }
 
 // Connect records that a stream connection for node opened, with the
@@ -152,20 +267,48 @@ func NewNodes(now func() time.Time, ttl time.Duration) *Nodes {
 // The returned disconnect function decrements the connection count and
 // updates LastSeen; it is idempotent. The stream handler defers it.
 func (n *Nodes) Connect(node string, since int64) (disconnect func()) {
-	panic("controlplane: Nodes.Connect not implemented (Phase 4)")
+	n.mu.Lock()
+	now := n.now()
+	e := n.entry(node)
+	e.conns++
+	// A fresh pointer per connection: List hands out copies, so the value
+	// behind an old pointer is never mutated.
+	connectedAt := now
+	e.status.ConnectedAt = &connectedAt
+	e.status.LastSeen = now
+	e.status.AppliedVersion = since
+	n.mu.Unlock()
+
+	var once sync.Once
+	return func() {
+		// Once makes a double disconnect harmless; holding e directly is
+		// safe because List never evicts an entry while conns > 0.
+		once.Do(func() {
+			n.mu.Lock()
+			defer n.mu.Unlock()
+			e.conns--
+			e.status.LastSeen = n.now()
+		})
+	}
 }
 
 // Offered records that version was written to node's stream successfully:
 // LastOfferedVersion = max(LastOfferedVersion, version), LastSeen = now.
 // A call for an unknown node creates the entry.
 func (n *Nodes) Offered(node string, version int64) {
-	panic("controlplane: Nodes.Offered not implemented (Phase 4)")
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	e := n.entry(node)
+	e.status.LastOfferedVersion = max(e.status.LastOfferedVersion, version)
+	e.status.LastSeen = n.now()
 }
 
 // Seen updates LastSeen (after a successful heartbeat write). A call for
 // an unknown node creates the entry.
 func (n *Nodes) Seen(node string) {
-	panic("controlplane: Nodes.Seen not implemented (Phase 4)")
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.entry(node).status.LastSeen = n.now()
 }
 
 // Report records a status report from POST /v1/dataplanes/{node}/status.
@@ -175,12 +318,40 @@ func (n *Nodes) Seen(node string) {
 // needed (a gateway may report an LKG-applied version before its stream
 // connects), leaving ConnectedAt nil.
 func (n *Nodes) Report(node string, r StatusReport) {
-	panic("controlplane: Nodes.Report not implemented (Phase 4)")
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	e := n.entry(node)
+	e.status.AppliedVersion = r.Applied
+	e.status.RejectedVersion = r.LastRejected
+	e.status.LastError = r.Error
+	e.status.LastSeen = n.now()
 }
 
 // List first evicts expired entries (not connected and LastSeen older than
 // the TTL), then returns a copy of every remaining entry sorted by Node.
 // It returns an empty non-nil slice when there are none.
 func (n *Nodes) List() []NodeStatus {
-	panic("controlplane: Nodes.List not implemented (Phase 4)")
+	n.mu.Lock()
+	now := n.now()
+	out := make([]NodeStatus, 0, len(n.nodes))
+	for id, e := range n.nodes {
+		if e.conns == 0 && now.Sub(e.status.LastSeen) > n.ttl {
+			delete(n.nodes, id) // deleting during range is allowed in Go
+			continue
+		}
+		ns := e.status
+		ns.Connected = e.conns > 0
+		if ns.ConnectedAt != nil {
+			// Deep copy so a caller writing through the pointer cannot
+			// reach the registry.
+			t := *ns.ConnectedAt
+			ns.ConnectedAt = &t
+		}
+		out = append(out, ns)
+	}
+	n.mu.Unlock()
+
+	// Sorting happens outside the lock: out is private to this call.
+	slices.SortFunc(out, func(a, b NodeStatus) int { return strings.Compare(a.Node, b.Node) })
+	return out
 }
