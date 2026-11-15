@@ -5,15 +5,19 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
-	"log"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"slices"
 	"strings"
+	"time"
 
+	"github.com/amitkhanal596/tollgate/internal/auth"
 	"github.com/amitkhanal596/tollgate/internal/balancer"
+	"github.com/amitkhanal596/tollgate/internal/config"
+	"github.com/amitkhanal596/tollgate/internal/health"
+	"github.com/amitkhanal596/tollgate/internal/ratelimit"
 )
 
 // HeaderRequestID carries the per-request correlation ID to the upstream
@@ -23,8 +27,8 @@ const HeaderRequestID = "X-Request-ID"
 // HeaderClientID tells the upstream which authenticated client made the
 // request. The gateway ALWAYS removes any inbound copy (every route, every
 // spelling), so an upstream can trust it: it is only ever set by the
-// gateway, and only from an authenticated Identity (Phase 3), never from
-// the client IP (docs/architecture.md section 11 row 12).
+// gateway, and only from an authenticated auth.Identity, never from the
+// client IP (docs/architecture.md section 11 row 12).
 const HeaderClientID = "X-Tollgate-Client-ID"
 
 // statusClientClosedRequest is nginx's non-standard code for "the client
@@ -38,7 +42,10 @@ const statusClientClosedRequest = 499
 // logs or upstream headers.
 const maxRequestIDLen = 128
 
-// ServeHTTP is the data-plane request path (docs/architecture.md section 4).
+// ServeHTTP is the data-plane request path (docs/architecture.md section
+// 4): snapshot -> path check -> route match -> auth -> rate limit ->
+// balancer -> proxy -> passive health. It takes no locks: the snapshot is
+// one atomic load, and the limiters and Backends are concurrency-safe.
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// The ID is put on the response by writeError and ModifyResponse, not
 	// here: ReverseProxy clears the response header map after relaying a
@@ -46,7 +53,9 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	reqID := requestID(r.Header.Get(HeaderRequestID))
 
 	// One atomic load; this request uses this snapshot until it finishes,
-	// even if a reload swaps in a newer one meanwhile (ADR 0002).
+	// even if a reload swaps in a newer one meanwhile (ADR 0002). That
+	// includes its auth rules and limits: a request admitted under the old
+	// rules finishes under them.
 	s := g.snap.Load()
 	if s == nil {
 		writeError(w, http.StatusServiceUnavailable, reqID)
@@ -69,13 +78,23 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Allocated once and shared by admission and the ReverseProxy hooks.
+	st := &proxyState{requestID: reqID, route: route.name}
+
+	// Steps 2-3. Both run before the balancer, so a rejected request never
+	// takes a round-robin turn or an in-flight slot.
+	if !g.admit(w, r, route, st) {
+		return
+	}
+
 	lb := route.upstream.lb
 	b, err := lb.Next()
 	if err != nil {
-		// ErrNoHealthyBackends is the only error Next returns; 503 tells
-		// clients the condition is temporary.
+		// ErrNoHealthyBackends is the only error Next returns (every
+		// backend down or ejected); 503 tells clients it is temporary.
 		g.logger.Warn("no healthy backend",
 			"request_id", reqID, "route", route.name, "upstream", route.upstream.name, "err", err)
+		st.setRateLimitHeaders(w.Header())
 		writeError(w, http.StatusServiceUnavailable, reqID)
 		return
 	}
@@ -85,27 +104,36 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// which stays valid even if a reload has since pruned b from the
 	// Registry.
 	defer lb.Done(b)
+	st.backend = b
 
 	// The request timeout bounds the whole exchange including streaming
 	// the body. It derives from the client's context, so a client that
 	// disconnects also cancels the upstream request.
 	ctx, cancel := context.WithTimeout(r.Context(), route.timeouts.request)
 	defer cancel()
-	ctx = context.WithValue(ctx, proxyStateKey{}, &proxyState{
-		backend:   b,
-		requestID: reqID,
-		route:     route.name,
-	})
+	ctx = context.WithValue(ctx, proxyStateKey{}, st)
 	route.proxy.ServeHTTP(w, r.WithContext(ctx))
 }
 
 // proxyState is what the shared per-route ReverseProxy hooks need to know
 // about the current request. It travels in the request context because one
-// ReverseProxy serves many concurrent requests.
+// ReverseProxy serves many concurrent requests. It is only ever touched by
+// the goroutine serving the request (ReverseProxy calls Rewrite,
+// ModifyResponse and ErrorHandler on it), so it needs no synchronisation.
 type proxyState struct {
 	backend   *balancer.Backend
 	requestID string
 	route     string
+	// clientID is the authenticated identity; "" on auth: none routes,
+	// where nothing identifies the client to the upstream.
+	clientID string
+	// rl is the route's rate-limit decision, valid when limited is true.
+	rl      ratelimit.Decision
+	limited bool
+	// observed is set once the attempt's outcome has gone to passive
+	// health, so an upgrade failure after ModifyResponse is not counted
+	// a second time.
+	observed bool
 }
 
 type proxyStateKey struct{}
@@ -115,9 +143,27 @@ func stateFrom(ctx context.Context) *proxyState {
 	return st
 }
 
+// setRateLimitHeaders writes the X-RateLimit-* headers of a limited route
+// into h; it does nothing on routes without a rate_limit.
+func (st *proxyState) setRateLimitHeaders(h http.Header) {
+	if st != nil && st.limited {
+		setRateLimitHeaders(h, st.rl)
+	}
+}
+
+// routeHooks are the ReverseProxy callbacks of one route. They hold only
+// per-route settings; per-request data comes from the proxyState.
+type routeHooks struct {
+	route   string
+	passive *config.PassiveHealth // nil = passive health off for this upstream
+	now     func() time.Time
+	logger  *slog.Logger
+}
+
 // newRouteProxy builds the ReverseProxy for one route. It holds no
 // per-request state, so concurrent requests share it safely.
-func newRouteProxy(route string, transport http.RoundTripper, buffers *bufferPool, logger *slog.Logger, errLog *log.Logger) *httputil.ReverseProxy {
+func (bd *builder) newRouteProxy(route string, transport http.RoundTripper, passive *config.PassiveHealth) *httputil.ReverseProxy {
+	h := &routeHooks{route: route, passive: passive, now: bd.now, logger: bd.logger}
 	return &httputil.ReverseProxy{
 		Rewrite:   rewrite,
 		Transport: transport,
@@ -125,29 +171,57 @@ func newRouteProxy(route string, transport http.RoundTripper, buffers *bufferPoo
 		// responses (SSE, long polls, chunked progress output) are not
 		// held back in a buffer. Large copies bypass the buffer anyway, so
 		// the extra flushes cost little.
-		FlushInterval: -1,
-		BufferPool:    buffers,
-		// The client gets our ID, replacing any the upstream sent, so the
-		// response carries exactly one. It is set here rather than on the
-		// ResponseWriter up front because ReverseProxy copies these headers
-		// after any 1xx, and clears the writer's header map after each 1xx.
-		// (Phase 2 passive health hooks in here as well.)
-		ModifyResponse: func(resp *http.Response) error {
-			if st := stateFrom(resp.Request.Context()); st != nil {
-				resp.Header.Set(HeaderRequestID, st.requestID)
-			} else {
-				resp.Header.Del(HeaderRequestID)
-			}
-			return nil
-		},
-		ErrorHandler: errorHandler(route, logger),
+		FlushInterval:  -1,
+		BufferPool:     bd.buffers,
+		ModifyResponse: h.modifyResponse,
+		ErrorHandler:   h.handleError,
 		// Routes ReverseProxy's own diagnostics into our structured log.
-		ErrorLog: errLog,
+		ErrorLog: bd.errLog,
+	}
+}
+
+// modifyResponse runs once the upstream's final response headers have
+// arrived, before anything is sent to the client.
+func (h *routeHooks) modifyResponse(resp *http.Response) error {
+	st := stateFrom(resp.Request.Context())
+	if st == nil {
+		resp.Header.Del(HeaderRequestID)
+		return nil
+	}
+	// Set on resp.Header, not the ResponseWriter up front: ReverseProxy
+	// copies these headers after any 1xx (and clears the writer's map after
+	// each 1xx), and Set replaces whatever the upstream sent, so the client
+	// gets exactly one request ID and our own rate-limit numbers.
+	resp.Header.Set(HeaderRequestID, st.requestID)
+	st.setRateLimitHeaders(resp.Header)
+	// Step 6: the outcome is taken at header time. A later body-copy error
+	// is not reported (ADR 0006).
+	h.observe(st, resp.StatusCode, nil)
+	return nil
+}
+
+// observe reports the attempt's outcome to passive health, at most once.
+func (h *routeHooks) observe(st *proxyState, status int, err error) {
+	if h.passive == nil || st.observed {
+		return
+	}
+	st.observed = true
+	if health.ObservePassive(st.backend, *h.passive, status, err, h.now()) {
+		h.logger.Warn("backend ejected after consecutive failures",
+			"route", h.route, "backend", st.backend.ID, "request_id", st.requestID,
+			"cooloff", time.Duration(h.passive.Cooloff).String())
 	}
 }
 
 // rewrite points the outbound request at the backend chosen for it.
 func rewrite(pr *httputil.ProxyRequest) {
+	// Anti-spoofing and credential hygiene, first and unconditionally, on
+	// the outbound copy (handlers should not mutate the inbound request),
+	// which is the last stop before the wire: the client must never choose
+	// the identity an upstream sees, and API keys are the gateway's
+	// business only. Authorization is forwarded on purpose (section 4).
+	stripHeaders(pr.Out.Header, HeaderClientID, auth.HeaderAPIKey)
+
 	st := stateFrom(pr.In.Context())
 	if st == nil {
 		// Unreachable: ServeHTTP always sets the state. Leaving the URL
@@ -164,59 +238,69 @@ func rewrite(pr *httputil.ProxyRequest) {
 	// With Rewrite, ReverseProxy strips the incoming X-Forwarded-For.
 	// Copy it back so SetXForwarded appends the client IP to the chain
 	// instead of replacing it. (It is forwarded for the upstream's
-	// benefit only; the gateway itself does not trust it in v1.)
+	// benefit only; the gateway itself never trusts it in v1.)
 	if prior, ok := pr.In.Header["X-Forwarded-For"]; ok {
 		pr.Out.Header["X-Forwarded-For"] = slices.Clone(prior)
 	}
 	pr.SetXForwarded()
 	pr.Out.Header.Set(HeaderRequestID, st.requestID)
-	// Anti-spoofing: the client must never be able to choose the identity
-	// an upstream sees. Done on the outbound copy (handlers should not
-	// mutate the inbound request), which is the last stop before the wire.
-	stripHeader(pr.Out.Header, HeaderClientID)
+	// Only an authenticated identity is ever sent; never the client IP
+	// (section 11 row 12).
+	if st.clientID != "" {
+		pr.Out.Header.Set(HeaderClientID, st.clientID)
+	}
 }
 
-// stripHeader removes every entry for name. Header.Del only removes the
-// canonical key, but a header map built in code (not parsed off the wire)
-// can hold non-canonical keys such as "x-tollgate-client-id", and the
-// transport writes those out verbatim.
-func stripHeader(h http.Header, name string) {
-	h.Del(name)
+// stripHeaders removes every entry for each of names. Header.Del only
+// removes the canonical key, but a header map built in code (not parsed off
+// the wire) can hold non-canonical keys such as "x-tollgate-client-id", and
+// the transport writes those out verbatim.
+func stripHeaders(h http.Header, names ...string) {
+	for _, name := range names {
+		h.Del(name)
+	}
 	for k := range h {
-		if strings.EqualFold(k, name) {
-			delete(h, k) // deleting during range is safe in Go
+		for _, name := range names {
+			if strings.EqualFold(k, name) {
+				delete(h, k) // deleting during range is safe in Go
+				break
+			}
 		}
 	}
 }
 
-// errorHandler maps transport failures to a status (docs/architecture.md
-// section 8). It runs only before any response bytes have been written; a
-// failure while streaming the body makes ReverseProxy abort the connection
-// instead.
-func errorHandler(route string, logger *slog.Logger) func(http.ResponseWriter, *http.Request, error) {
-	return func(w http.ResponseWriter, r *http.Request, err error) {
-		status := classifyProxyError(r.Context(), err)
-		attrs := []any{"route", route, "status", status, "err", err}
-		if st := stateFrom(r.Context()); st != nil {
-			// The backend address is fine in logs; it never goes in a body.
-			attrs = append(attrs, "request_id", st.requestID, "backend", st.backend.ID)
-		}
-		var reqID string
-		if st := stateFrom(r.Context()); st != nil {
-			reqID = st.requestID
-		}
-		if status == statusClientClosedRequest {
-			// The client's choice, not a gateway or backend fault: log at
-			// Info. Never reported to passive health (section 11 row 11).
-			// We still write 499 so net/http does not send its implicit
-			// 200 to a half-closed client; the write may simply fail.
-			logger.Info("client canceled request", attrs...)
-			writeError(w, status, reqID)
-			return
-		}
-		logger.Warn("upstream request failed", attrs...)
-		writeError(w, status, reqID)
+// handleError maps transport failures to a status (docs/architecture.md
+// section 8) and reports them to passive health. It runs only before any
+// response bytes have been written; a failure while streaming the body
+// makes ReverseProxy abort the connection instead, and is never reported.
+func (h *routeHooks) handleError(w http.ResponseWriter, r *http.Request, err error) {
+	status := classifyProxyError(r.Context(), err)
+	st := stateFrom(r.Context())
+	attrs := []any{"route", h.route, "status", status, "err", err}
+	var reqID string
+	if st != nil {
+		// The backend address is fine in logs; it never goes in a body.
+		attrs = append(attrs, "request_id", st.requestID, "backend", st.backend.ID)
+		reqID = st.requestID
 	}
+	if status == statusClientClosedRequest {
+		// The client's choice, not a gateway or backend fault: log at
+		// Info, and NEVER report it to passive health, or clients that
+		// hang up could eject healthy backends (section 11 row 11).
+		// We still write 499 so net/http does not send its implicit 200
+		// to a half-closed client; the write may simply fail.
+		h.logger.Info("client canceled request", attrs...)
+		writeError(w, status, reqID)
+		return
+	}
+	// Our own deadline (504), dial failures and resets (502) all say
+	// something about the backend.
+	if st != nil {
+		h.observe(st, status, err)
+	}
+	h.logger.Warn("upstream request failed", attrs...)
+	st.setRateLimitHeaders(w.Header())
+	writeError(w, status, reqID)
 }
 
 // classifyProxyError decides the status for a failed upstream attempt.

@@ -5,13 +5,17 @@ import (
 	"fmt"
 	"log"
 	"log/slog"
+	"math"
 	"net/http/httputil"
 	"net/url"
 	"strings"
 	"time"
 
+	"github.com/amitkhanal596/tollgate/internal/auth"
 	"github.com/amitkhanal596/tollgate/internal/balancer"
 	"github.com/amitkhanal596/tollgate/internal/config"
+	"github.com/amitkhanal596/tollgate/internal/health"
+	"github.com/amitkhanal596/tollgate/internal/ratelimit"
 )
 
 // Snapshot is one fully built, immutable view of the gateway configuration.
@@ -38,6 +42,10 @@ type Snapshot struct {
 	// pool down to them.
 	backendIDs    map[string]struct{}
 	transportKeys map[transportKey]struct{}
+
+	// healthTargets is one active-probe target per backend of every
+	// upstream with a health_check, handed to Checker.Sync after the swap.
+	healthTargets []health.Target
 }
 
 // routeRT is the runtime form of one config.Route.
@@ -53,6 +61,18 @@ type routeRT struct {
 	// The per-request backend reaches its Rewrite hook through the request
 	// context.
 	proxy *httputil.ReverseProxy
+
+	// authn verifies credentials; nil for auth: none. One instance per auth
+	// mode per snapshot, shared by every route using that mode.
+	authn auth.Authenticator
+	// challenge is the WWW-Authenticate value of this route's 401s. It
+	// depends only on the mode, never on what was wrong with the request.
+	challenge string
+	// limit is the per-client rate limit; nil means not rate limited.
+	limit *ratelimit.Limit
+	// limitKeyPrefix is name + "\x00", precomputed so building the
+	// per-request bucket key is a single concatenation.
+	limitKeyPrefix string
 }
 
 // upstreamRT is the runtime form of one config.Upstream.
@@ -60,7 +80,18 @@ type upstreamRT struct {
 	name     string
 	lb       balancer.Balancer
 	backends []*balancer.Backend // from the Registry: same pointers across swaps
+	// passive is a private copy of the upstream's passive_health (the
+	// Config must not be modified, and must not modify us); nil = off.
+	passive *config.PassiveHealth
 }
+
+// WWW-Authenticate challenges, one per auth mode (RFC 7235 section 4.1).
+// No error="invalid_token" detail (RFC 6750): that would tell a client
+// whether its credentials were missing or wrong.
+const (
+	challengeAPIKey = `APIKey realm="tollgate"`
+	challengeJWT    = `Bearer realm="tollgate"`
+)
 
 // resolvedTimeouts are fully defaulted: route field, then
 // Defaults.Timeouts, then the built-in config.Default* constant.
@@ -76,18 +107,28 @@ type builder struct {
 	transports *transportPool
 	buffers    *bufferPool
 	now        func() time.Time
+	getenv     func(string) string          // JWT HS256 secret lookup; nil = os.Getenv
+	readFile   func(string) ([]byte, error) // JWT RS256 key file; nil = os.ReadFile
 	logger     *slog.Logger
 	errLog     *log.Logger // bridge for httputil.ReverseProxy.ErrorLog
 }
 
 // build turns cfg into a Snapshot. It runs in two passes: the first only
-// inspects cfg and can fail; the second creates Registry entries and
-// transports and cannot fail. That ordering means a rejected config never
-// leaves half-registered Backends or orphan transports behind.
+// inspects cfg, constructs the authenticators and can fail; the second
+// creates Registry entries and transports and cannot fail. That ordering
+// means a rejected config never leaves half-registered Backends or orphan
+// transports behind.
 func (bd *builder) build(cfg *config.Config) (*Snapshot, error) {
 	urls, err := checkConfig(cfg)
 	if err != nil {
 		return nil, err
+	}
+	authns, err := bd.buildAuthenticators(cfg)
+	if err != nil {
+		// A route whose authenticator cannot be built would have to either
+		// fail open or reject everything; rejecting the whole config keeps
+		// the old snapshot (and its working auth) serving instead.
+		return nil, fmt.Errorf("proxy: build snapshot for version %d: %w", cfg.Version, err)
 	}
 
 	s := &Snapshot{
@@ -118,10 +159,23 @@ func (bd *builder) build(cfg *config.Config) (*Snapshot, error) {
 			bd.logger.Warn("consul upstreams are not supported yet; upstream has no backends",
 				"upstream", u.Name)
 		}
+		if u.HealthCheck != nil {
+			// Upstreams without a health_check contribute no targets, which
+			// makes the Checker stop their probes and reset them to up.
+			for _, b := range backends {
+				s.healthTargets = append(s.healthTargets, health.Target{Backend: b, Check: *u.HealthCheck})
+			}
+		}
+		var passive *config.PassiveHealth
+		if u.PassiveHealth != nil {
+			p := *u.PassiveHealth
+			passive = &p
+		}
 		s.upstreams[u.Name] = &upstreamRT{
 			name:     u.Name,
 			lb:       bd.newBalancer(u, backends),
 			backends: backends,
+			passive:  passive,
 		}
 	}
 
@@ -130,30 +184,76 @@ func (bd *builder) build(cfg *config.Config) (*Snapshot, error) {
 		t := resolveTimeouts(r.Timeouts, cfg.Defaults.Timeouts)
 		key := transportKey{dial: t.dial, responseHeader: t.responseHeader}
 		s.transportKeys[key] = struct{}{}
-		routes = append(routes, &routeRT{
-			cfg:      r,
-			name:     r.Name,
-			host:     normalizeConfigHost(r.Host),
-			prefix:   r.PathPrefix,
-			upstream: s.upstreams[r.Upstream],
-			timeouts: t,
-			proxy:    newRouteProxy(r.Name, bd.transports.get(key), bd.buffers, bd.logger, bd.errLog),
-		})
+		upstream := s.upstreams[r.Upstream]
+		rr := &routeRT{
+			cfg:            r,
+			name:           r.Name,
+			host:           normalizeConfigHost(r.Host),
+			prefix:         r.PathPrefix,
+			upstream:       upstream,
+			timeouts:       t,
+			proxy:          bd.newRouteProxy(r.Name, bd.transports.get(key), upstream.passive),
+			limitKeyPrefix: r.Name + "\x00",
+		}
+		switch r.Auth {
+		case config.AuthAPIKey:
+			rr.authn, rr.challenge = authns.apiKey, challengeAPIKey
+		case config.AuthJWT:
+			rr.authn, rr.challenge = authns.jwt, challengeJWT
+		}
+		if r.RateLimit != nil {
+			rr.limit = &ratelimit.Limit{RatePerSecond: r.RateLimit.RequestsPerSecond, Burst: r.RateLimit.Burst}
+		}
+		routes = append(routes, rr)
 	}
 	s.router = newRouter(routes)
 	return s, nil
 }
 
-// newBalancer picks the balancing algorithm for an upstream.
+// newBalancer picks the balancing algorithm for an upstream (ADR 0003).
 func (bd *builder) newBalancer(u config.Upstream, backends []*balancer.Backend) balancer.Balancer {
 	switch u.Algorithm {
 	case config.AlgorithmLeastConn:
-		// TODO(Phase 2): return balancer.NewLeastConn(backends, bd.now).
-		// Until it exists, least_conn degrades to round robin.
-		return balancer.NewRoundRobin(backends, bd.now)
+		return balancer.NewLeastConn(backends, bd.now)
 	default: // "" or round_robin; checkConfig rejected anything else
 		return balancer.NewRoundRobin(backends, bd.now)
 	}
+}
+
+// authenticators holds the per-snapshot Authenticator for each auth mode;
+// a nil field means no route uses that mode.
+type authenticators struct {
+	apiKey auth.Authenticator
+	jwt    auth.Authenticator
+}
+
+// buildAuthenticators constructs each authenticator once per config, and
+// only if some route needs it: an unused, half-configured jwt block (say,
+// a secret env var not set on this host) must not reject the config.
+// checkConfig has already ensured auth.jwt is set when a route needs it.
+func (bd *builder) buildAuthenticators(cfg *config.Config) (authenticators, error) {
+	var needAPIKey, needJWT bool
+	for _, r := range cfg.Routes {
+		needAPIKey = needAPIKey || r.Auth == config.AuthAPIKey
+		needJWT = needJWT || r.Auth == config.AuthJWT
+	}
+	var out authenticators
+	var errs []error
+	if needAPIKey {
+		a, err := auth.NewAPIKey(cfg.Auth.APIKeys)
+		if err != nil {
+			errs = append(errs, err)
+		}
+		out.apiKey = a
+	}
+	if needJWT {
+		a, err := auth.NewJWT(*cfg.Auth.JWT, bd.getenv, bd.readFile, bd.now)
+		if err != nil {
+			errs = append(errs, err)
+		}
+		out.jwt = a
+	}
+	return out, errors.Join(errs...)
 }
 
 // checkConfig is the failing half of build: it verifies everything the
@@ -195,6 +295,22 @@ func checkConfig(cfg *config.Config) (map[string][]*url.URL, error) {
 		}
 		if !strings.HasPrefix(r.PathPrefix, "/") {
 			errs = append(errs, fmt.Errorf("route %q: path_prefix %q must start with /", r.Name, r.PathPrefix))
+		}
+		// An unknown auth mode must fail closed here: at request time it
+		// would otherwise look like "none" and serve the route unauthenticated.
+		switch r.Auth {
+		case "", config.AuthNone, config.AuthAPIKey:
+		case config.AuthJWT:
+			if cfg.Auth.JWT == nil {
+				errs = append(errs, fmt.Errorf("route %q: auth jwt requires auth.jwt settings", r.Name))
+			}
+		default:
+			errs = append(errs, fmt.Errorf("route %q: unknown auth mode %q", r.Name, r.Auth))
+		}
+		// The limiter treats an invalid Limit as unlimited (fail open), so
+		// a bad one must be rejected here instead.
+		if l := r.RateLimit; l != nil && !(l.RequestsPerSecond > 0 && !math.IsInf(l.RequestsPerSecond, 1) && l.Burst >= 1) {
+			errs = append(errs, fmt.Errorf("route %q: rate_limit needs requests_per_second > 0 and burst >= 1", r.Name))
 		}
 	}
 	if err := errors.Join(errs...); err != nil {

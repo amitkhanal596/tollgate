@@ -1,6 +1,7 @@
-// Package proxy is the data plane: it composes routing, load balancing and
-// reverse proxying behind an atomically swapped, immutable Snapshot
-// (docs/architecture.md sections 4-5, ADR 0002).
+// Package proxy is the data plane: it composes routing, authentication, rate
+// limiting, load balancing, health checking and reverse proxying behind an
+// atomically swapped, immutable Snapshot (docs/architecture.md sections 4-5,
+// ADR 0002).
 package proxy
 
 import (
@@ -9,29 +10,76 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/amitkhanal596/tollgate/internal/balancer"
 	"github.com/amitkhanal596/tollgate/internal/config"
+	"github.com/amitkhanal596/tollgate/internal/health"
+	"github.com/amitkhanal596/tollgate/internal/ratelimit"
 )
 
-// Options configures a Gateway. The zero value is usable.
+// Options configures a Gateway. The zero value is usable: every nil field
+// gets a production default.
 type Options struct {
 	// Logger receives structured logs. Nil discards them.
 	Logger *slog.Logger
-	// Now is the clock used for passive-ejection expiry. Nil uses time.Now.
+	// Now is the gateway's clock: passive-ejection expiry, JWT exp/nbf
+	// checks, and the clock of the limiters the Gateway creates itself. Nil
+	// uses time.Now. Tests inject a fake clock.
 	Now func() time.Time
+
+	// Limiter enforces the per-route rate limits (route.rate_limit), keyed
+	// by route name + "\x00" + client identity. Nil makes the Gateway create
+	// its own ratelimit.TokenBucket (clock: Now), which Gateway.Run sweeps.
+	// An injected Limiter is used as-is: the caller owns it and runs any
+	// sweeper it needs; the Gateway never starts goroutines for it.
+	Limiter ratelimit.Limiter
+	// AuthLimiter is the failed-auth throttle (ADR 0004, architecture.md
+	// section 11 row 10): keyed by client-IP key, fixed policy burst 10,
+	// refill 1/s. It must be a different instance from Limiter, so an
+	// auth-failure flood cannot spend the route limiter's key budget. Nil
+	// makes the Gateway create and sweep its own, as for Limiter; an
+	// injected one is owned by the caller.
+	AuthLimiter ratelimit.Limiter
+	// Getenv resolves auth.jwt.hmac_secret_env when a snapshot is built.
+	// Nil uses os.Getenv.
+	Getenv func(string) string
+	// ReadFile reads auth.jwt.public_key_file when a snapshot is built.
+	// Nil uses os.ReadFile.
+	ReadFile func(string) ([]byte, error)
+	// HealthClient sends active health probes. The Checker uses a shallow
+	// copy that never follows redirects and shares this client's Transport.
+	// Nil gives the Checker a private transport whose idle connections are
+	// closed when Run returns.
+	HealthClient *http.Client
+}
+
+// Failed-auth throttle policy (ADR 0004, architecture.md section 11 row 10).
+// Constants rather than a package-level Limit var: no global mutable state.
+const (
+	authFailureRate  = 1.0 // tokens per second
+	authFailureBurst = 10
+)
+
+func authFailureLimit() ratelimit.Limit {
+	return ratelimit.Limit{RatePerSecond: authFailureRate, Burst: authFailureBurst}
 }
 
 // Gateway is the data-plane HTTP handler. It serves requests from the
 // current Snapshot (lock-free) while Run, the single writer, builds and
 // publishes new snapshots as configs arrive.
 //
-// Long-lived state that must survive reloads (backend health and in-flight
-// counts, pooled upstream connections) lives here, outside the snapshot.
+// Long-lived state that must survive reloads lives here, outside the
+// snapshot: backend health and in-flight counts (Registry), pooled upstream
+// connections, the active health Checker, and both rate limiters (so a
+// reload neither refills a throttled client's bucket nor ignores a changed
+// limit).
 type Gateway struct {
 	logger *slog.Logger
+	now    func() time.Time
 
 	// snap is read on every request and written only by Run. nil until the
 	// first config has been applied (not ready, 503).
@@ -41,13 +89,25 @@ type Gateway struct {
 	transports *transportPool
 	builder    *builder
 
+	// checker probes the backends of every upstream with a health_check.
+	// apply feeds it with Sync; Run owns its goroutine.
+	checker *health.Checker
+
+	// limiter and authLimiter are read on the request path. Both are safe
+	// for concurrent use and never replaced after New, so no lock is needed.
+	limiter     ratelimit.Limiter
+	authLimiter ratelimit.Limiter
+	// sweepers are the limiters this Gateway created (not injected ones);
+	// Run runs their idle-bucket sweep for as long as it runs.
+	sweepers []*ratelimit.TokenBucket
+
 	// running enforces the single-writer rule: a second concurrent Run
 	// would race the first one on Store and Prune.
 	running atomic.Bool
 }
 
 // New returns a Gateway with no config. It serves 503 until Run applies the
-// first config.
+// first config. New starts no goroutines; Run does.
 func New(opts Options) *Gateway {
 	logger := opts.Logger
 	if logger == nil {
@@ -58,15 +118,32 @@ func New(opts Options) *Gateway {
 		now = time.Now
 	}
 	g := &Gateway{
-		logger:     logger,
-		registry:   balancer.NewRegistry(),
-		transports: newTransportPool(),
+		logger:      logger,
+		now:         now,
+		registry:    balancer.NewRegistry(),
+		transports:  newTransportPool(),
+		limiter:     opts.Limiter,
+		authLimiter: opts.AuthLimiter,
 	}
+	if g.limiter == nil {
+		tb := ratelimit.NewTokenBucket(ratelimit.Options{Now: now})
+		g.limiter, g.sweepers = tb, append(g.sweepers, tb)
+	}
+	if g.authLimiter == nil {
+		tb := ratelimit.NewTokenBucket(ratelimit.Options{Now: now})
+		g.authLimiter, g.sweepers = tb, append(g.sweepers, tb)
+	}
+	g.checker = health.NewChecker(opts.HealthClient, now, func(b *balancer.Backend, up bool) {
+		// Runs on the probe goroutine; logging is concurrency-safe and quick.
+		logger.Info("backend active health changed", "backend", b.ID, "up", up)
+	})
 	g.builder = &builder{
 		registry:   g.registry,
 		transports: g.transports,
 		buffers:    newBufferPool(),
 		now:        now,
+		getenv:     opts.Getenv,
+		readFile:   opts.ReadFile,
 		logger:     logger,
 		errLog:     slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
 	}
@@ -89,12 +166,17 @@ func (g *Gateway) Version() int64 {
 
 // Run is the reconcile loop: it watches src and applies every config it
 // delivers. It is the only goroutine that writes the snapshot, the Registry
-// and the transport pool.
+// and the transport pool, and the only caller of Checker.Sync.
+//
+// Run also owns the Gateway's background goroutines for exactly its own
+// lifetime: the health Checker (and through it every probe) and the
+// idle-bucket sweepers of the limiters the Gateway created itself.
 //
 // Run returns nil when ctx is canceled or src closes its channel, and the
-// Watch error if src cannot start at all. Before returning it closes idle
-// upstream connections so their goroutines do not outlive it; requests
-// still in flight keep working.
+// Watch error if src cannot start at all (in which case it started
+// nothing). Before returning it stops the Checker and sweepers, waits for
+// all of them to exit, and closes idle upstream connections, so nothing it
+// started outlives it; requests still in flight keep working.
 func (g *Gateway) Run(ctx context.Context, src config.ConfigSource) error {
 	if !g.running.CompareAndSwap(false, true) {
 		return errors.New("proxy: Run is already running")
@@ -105,7 +187,33 @@ func (g *Gateway) Run(ctx context.Context, src config.ConfigSource) error {
 	if err != nil {
 		return fmt.Errorf("proxy: watch config: %w", err)
 	}
+
+	// Shutdown order, via LIFO defers: the loop below has returned (so no
+	// further Sync), then cancel the workers, wait for every one of them
+	// (the Checker waits for its probes), and only then close idle upstream
+	// connections. Sync never races this: it is called only from this
+	// goroutine, and even a late Sync is a non-blocking store.
+	bgCtx, stopBackground := context.WithCancel(ctx)
+	var wg sync.WaitGroup
 	defer g.transports.closeIdle()
+	defer wg.Wait()
+	defer stopBackground()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		// Only fails if already running, which g.running rules out.
+		if err := g.checker.Run(bgCtx); err != nil {
+			g.logger.Error("health checker stopped", "err", err)
+		}
+	}()
+	for _, tb := range g.sweepers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = tb.Run(bgCtx) // returns nil once bgCtx is done
+		}()
+	}
 
 	for {
 		select {
@@ -138,7 +246,8 @@ func (g *Gateway) apply(cfg *config.Config) {
 	}
 
 	// The swap. From here on new requests see s; requests already running
-	// keep the snapshot they loaded and finish on it.
+	// keep the snapshot they loaded and finish on it, with its routes, auth
+	// rules and limits.
 	g.snap.Store(s)
 
 	// Prune only AFTER the Store, so no newly arriving request can pick a
@@ -149,13 +258,21 @@ func (g *Gateway) apply(cfg *config.Config) {
 	// back by a later config, Registry.Get creates a fresh Backend with
 	// reset health and in-flight state, while the stragglers decrement the
 	// old object, so the new count never goes negative.
-	g.registry.Prune(s.backendIDs)
+	removed := g.registry.Prune(s.backendIDs)
 	g.transports.retain(s.transportKeys)
+
+	// Always pass the full current set: the Checker diffs by *Backend
+	// pointer, so pruned or re-added backends and upstreams that lost their
+	// health_check (reset to up) are all handled from this one call. Sync
+	// never blocks, and is fine before the Checker's Run has started.
+	g.checker.Sync(s.healthTargets)
 
 	g.logger.Info("config applied",
 		"version", s.Version,
 		"routes", len(cfg.Routes),
 		"upstreams", len(cfg.Upstreams),
 		"backends", len(s.backendIDs),
+		"backends_removed", len(removed),
+		"health_targets", len(s.healthTargets),
 		"build_duration", time.Since(start).String())
 }
