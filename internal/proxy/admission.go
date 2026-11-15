@@ -16,6 +16,16 @@ const (
 	headerRateLimitRemaining = "X-RateLimit-Remaining"
 )
 
+// Reason labels of tollgate_ratelimited_total and tollgate_auth_failures_total
+// (architecture.md section 9): small closed sets, never request data.
+const (
+	reasonLimit        = "limit"         // the client's bucket is empty
+	reasonCapacity     = "capacity"      // the key table is full and nothing idle could be evicted
+	reasonAuthThrottle = "auth_throttle" // the failed-auth throttle refused the attempt
+	reasonMissing      = "missing"       // no credential presented
+	reasonInvalid      = "invalid"       // a credential was presented and failed verification
+)
+
 // admit runs steps 2 (auth) and 3 (rate limit) of the request path
 // (docs/architecture.md section 4) for route. On success it records the
 // identity and the rate-limit decision in st and returns true. Otherwise it
@@ -43,11 +53,17 @@ func (g *Gateway) admit(w http.ResponseWriter, r *http.Request, route *routeRT, 
 		// for a hard bound on brute-force attempts and on RS256 CPU cost.
 		if d := g.authLimiter.Peek(ipKey, authFailureLimit()); !d.Allowed {
 			g.logger.Debug("failed-auth throttle", "request_id", st.requestID, "route", route.name)
+			// Not an auth failure: nothing was verified.
+			g.metrics.RateLimited(route.name, reasonAuthThrottle)
 			writeTooManyRequests(w, d.RetryAfter, st.requestID)
 			return false
 		}
 		id, err := route.authn.Authenticate(r)
 		if err != nil {
+			reason := reasonInvalid
+			if errors.Is(err, auth.ErrMissingCredentials) {
+				reason = reasonMissing
+			}
 			// Only wrong credentials cost a token: missing ones cost the
 			// gateway no crypto, and successes must never lock anyone out.
 			if errors.Is(err, auth.ErrInvalidCredentials) {
@@ -60,10 +76,12 @@ func (g *Gateway) admit(w http.ResponseWriter, r *http.Request, route *routeRT, 
 				// from untracked IPs are unaffected.
 				if d := g.authLimiter.Allow(ipKey, authFailureLimit()); d.AtCapacity {
 					g.logger.Debug("failed-auth throttle at capacity", "request_id", st.requestID, "route", route.name)
+					g.metrics.RateLimited(route.name, reasonAuthThrottle)
 					writeTooManyRequests(w, d.RetryAfter, st.requestID)
 					return false
 				}
 			}
+			g.metrics.AuthFailed(route.name, reason)
 			// Debug, not Info: a credential-guessing client would otherwise
 			// turn every attempt into a log line. The auth errors never
 			// contain the presented credential.
@@ -75,7 +93,6 @@ func (g *Gateway) admit(w http.ResponseWriter, r *http.Request, route *routeRT, 
 			return false
 		}
 		identity = id.ClientID
-		st.clientID = id.ClientID
 	}
 
 	if route.limit != nil {
@@ -91,12 +108,23 @@ func (g *Gateway) admit(w http.ResponseWriter, r *http.Request, route *routeRT, 
 		if !d.Allowed {
 			setRateLimitHeaders(w.Header(), d)
 			g.logger.Debug("rate limited", "request_id", st.requestID, "route", route.name, "at_capacity", d.AtCapacity)
+			reason := reasonLimit
+			if d.AtCapacity {
+				reason = reasonCapacity
+			}
+			g.metrics.RateLimited(route.name, reason)
 			writeTooManyRequests(w, d.RetryAfter, st.requestID)
 			return false
 		}
 		// Written later, with the response, so they survive ReverseProxy's
 		// 1xx header clearing and override any upstream copy.
 		st.rl, st.limited = d, true
+	}
+	// Recorded only now that the request is admitted: it is what the
+	// upstream receives as X-Tollgate-Client-ID and what the access log
+	// shows, and a request refused by the rate limit carries neither.
+	if route.authn != nil {
+		st.clientID = identity
 	}
 	return true
 }

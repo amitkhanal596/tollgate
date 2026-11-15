@@ -1,10 +1,12 @@
-// Command gateway runs the Tollgate data plane from a YAML config file.
+// Command gateway runs the Tollgate data plane. It takes its config either
+// from a YAML file (-config, standalone) or from the control plane's SSE
+// stream (-control-plane, ADR 0005), never both.
 //
 // Shutdown on SIGINT/SIGTERM follows docs/architecture.md section 7: mark
 // not ready, keep serving for -shutdown-delay, drain the traffic listener,
-// stop the admin listener, cancel the background context (config watcher
-// and reconcile loop), wait for every goroutine, then exit. A second signal
-// kills the process immediately.
+// stop the admin listener, cancel the background context (config source,
+// reconcile loop and metrics sampler), wait for every goroutine, then exit.
+// A second signal kills the process immediately.
 package main
 
 import (
@@ -23,12 +25,26 @@ import (
 	"syscall"
 	"time"
 
+	consulapi "github.com/hashicorp/consul/api"
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/amitkhanal596/tollgate/internal/config"
+	"github.com/amitkhanal596/tollgate/internal/discovery"
+	"github.com/amitkhanal596/tollgate/internal/metrics"
 	"github.com/amitkhanal596/tollgate/internal/proxy"
 )
 
 // adminDrain is short: admin handlers answer instantly.
 const adminDrain = 2 * time.Second
+
+// envDataPlaneToken holds the bearer token for the control-plane stream.
+// It is read from the environment only, never from a flag (flags show up in
+// ps and in pod specs), and it is never logged.
+const envDataPlaneToken = "TOLLGATE_DATAPLANE_TOKEN"
+
+// streamGaugeInterval is how often tollgate_config_stream_connected is
+// refreshed from RemoteSource.Connected, which has no change hook.
+const streamGaugeInterval = 250 * time.Millisecond
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -36,42 +52,63 @@ func main() {
 	// Ctrl-C/SIGTERM kills the process at once (skipping the shutdown delay
 	// and the drain) instead of being swallowed by NotifyContext.
 	context.AfterFunc(ctx, stop)
-	// run returns only after every goroutine it started has exited, so
+	// runEnv returns only after every goroutine it started has exited, so
 	// os.Exit cannot cut anything short.
-	code := run(ctx, os.Args[1:], os.Stdout)
+	code := runEnv(ctx, os.Args[1:], os.Stdout, os.Getenv)
 	stop()
 	os.Exit(code)
 }
 
-// run is the whole gateway process: it serves until ctx is canceled (main
-// cancels it on SIGINT/SIGTERM), then shuts down in the order of
+// run is runEnv with the process environment.
+func run(ctx context.Context, args []string, logOut io.Writer) int {
+	return runEnv(ctx, args, logOut, os.Getenv)
+}
+
+// runEnv is the whole gateway process: it serves until ctx is canceled
+// (main cancels it on SIGINT/SIGTERM), then shuts down in the order of
 // docs/architecture.md section 7. It returns the exit code: 0 after a clean
 // shutdown, 1 on a startup failure, a component failure or a drain timeout,
-// and 2 on bad flags. All output (logs and flag usage) goes to logOut, so
-// run touches no process-global state and tests can call it directly.
-func run(ctx context.Context, args []string, logOut io.Writer) int {
-	return runWithSource(ctx, args, logOut,
-		func(path string, poll time.Duration, logger *slog.Logger) config.ConfigSource {
-			return config.NewFileSource(path, poll, logger)
-		})
+// and 2 on bad flags. All output (logs, access log and flag usage) goes to
+// logOut, and getenv replaces os.Getenv (TOLLGATE_DATAPLANE_TOKEN and the
+// JWT secret variables), so it touches no process-global state and tests
+// can call it directly.
+func runEnv(ctx context.Context, args []string, logOut io.Writer, getenv func(string) string) int {
+	return runGateway(ctx, args, logOut, getenv, newFileSource)
+}
+
+// newFileSource is the production factory for standalone mode.
+func newFileSource(path string, poll time.Duration, logger *slog.Logger) config.ConfigSource {
+	return config.NewFileSource(path, poll, logger)
 }
 
 // errSourceEnded reports that the config stream closed while nobody had asked
 // the process to stop.
 var errSourceEnded = errors.New("config source closed its stream unexpectedly")
 
-// runWithSource is run with the ConfigSource built by newSource (from the
-// -config path and -config-poll interval) instead of always a FileSource. It
-// is the seam for testing how the process reacts to its source.
+// runWithSource is run with the standalone-mode ConfigSource built by
+// newSource (from the -config path and -config-poll interval) instead of a
+// FileSource. It is the seam for testing how the process reacts to its
+// source.
 func runWithSource(ctx context.Context, args []string, logOut io.Writer,
+	newSource func(path string, poll time.Duration, logger *slog.Logger) config.ConfigSource) int {
+	return runGateway(ctx, args, logOut, os.Getenv, newSource)
+}
+
+// runGateway is the implementation behind run, runEnv and runWithSource.
+func runGateway(ctx context.Context, args []string, logOut io.Writer, getenv func(string) string,
 	newSource func(path string, poll time.Duration, logger *slog.Logger) config.ConfigSource) int {
 	// A FlagSet local to run, never flag.CommandLine: no global state, and
 	// tests can call run repeatedly.
 	fs := flag.NewFlagSet("gateway", flag.ContinueOnError)
 	fs.SetOutput(logOut)
-	cfgPath := fs.String("config", "", "path to the gateway YAML config (required)")
+	cfgPath := fs.String("config", "", "path to the gateway YAML config (standalone mode; exactly one of -config and -control-plane)")
+	cpURL := fs.String("control-plane", "", "base URL of the control plane, e.g. http://controlplane:9000 (needs $"+envDataPlaneToken+")")
+	nodeID := fs.String("node-id", "", "this gateway's ID at the control plane (default: the hostname)")
+	lkgPath := fs.String("lkg-path", "", "file holding the last applied config, served at startup if the control plane is down (\"\" = off)")
+	consulAddr := fs.String("consul-addr", "", "host:port of the local Consul agent; enables consul upstreams")
+	accessLog := fs.Bool("access-log", true, "write one JSON line per request")
 	listen := fs.String("listen", ":8080", "address for client traffic")
-	adminListen := fs.String("admin-listen", ":9090", "address for /healthz and /readyz")
+	adminListen := fs.String("admin-listen", ":9090", "address for /healthz, /readyz and /metrics")
 	drain := fs.Duration("drain-timeout", 15*time.Second, "how long in-flight requests may take to finish on shutdown")
 	shutdownDelay := fs.Duration("shutdown-delay", 0,
 		"after a shutdown signal, how long to keep serving while /readyz reports 503, so load balancers stop sending traffic first")
@@ -85,8 +122,8 @@ func runWithSource(ctx context.Context, args []string, logOut io.Writer,
 
 	logger := slog.New(slog.NewJSONHandler(logOut, nil))
 	switch {
-	case *cfgPath == "":
-		logger.Error("missing required flag -config")
+	case (*cfgPath == "") == (*cpURL == ""):
+		logger.Error("exactly one of -config and -control-plane is required")
 		return 2
 	case *drain <= 0:
 		logger.Error("-drain-timeout must be positive", "drain_timeout", drain.String())
@@ -94,6 +131,92 @@ func runWithSource(ctx context.Context, args []string, logOut io.Writer,
 	case *shutdownDelay < 0:
 		logger.Error("-shutdown-delay must not be negative", "shutdown_delay", shutdownDelay.String())
 		return 2
+	}
+
+	// Everything that can fail on bad input is built before the listeners
+	// are bound, so such a failure has nothing to clean up.
+	var (
+		src    config.ConfigSource
+		remote *config.RemoteSource // non-nil in control-plane mode
+		// idle holds transports whose idle connections are closed once
+		// the background goroutines have stopped, so no keep-alive
+		// connection outlives runGateway.
+		idle []*http.Transport
+	)
+	if *cpURL != "" {
+		token := getenv(envDataPlaneToken)
+		if token == "" {
+			logger.Error("-control-plane requires the " + envDataPlaneToken + " environment variable")
+			return 1
+		}
+		id := *nodeID
+		if id == "" {
+			host, err := os.Hostname()
+			if err != nil {
+				logger.Error("cannot determine the hostname for -node-id; set -node-id", "err", err)
+				return 2
+			}
+			id = host
+		}
+		// A dedicated transport (not http.DefaultTransport, which other
+		// code shares) so its idle connections can be closed at exit.
+		tr := http.DefaultTransport.(*http.Transport).Clone()
+		idle = append(idle, tr)
+		rs, err := config.NewRemoteSource(config.RemoteOptions{
+			BaseURL:    *cpURL,
+			Token:      token,
+			NodeID:     id,
+			LKGPath:    *lkgPath,
+			HTTPClient: &http.Client{Transport: tr}, // Timeout must stay 0: it would cut the stream
+			Logger:     logger,
+		})
+		if err != nil {
+			// The error names the bad flag value (URL or node ID), never the token.
+			logger.Error("invalid control-plane settings", "err", err)
+			return 2
+		}
+		src, remote = rs, rs
+		*nodeID = id
+	} else {
+		if *lkgPath != "" || *nodeID != "" {
+			logger.Warn("-node-id and -lkg-path only apply with -control-plane; ignored")
+		}
+		src = newSource(*cfgPath, *poll, logger)
+	}
+
+	var resolver discovery.Resolver
+	if *consulAddr != "" {
+		// DefaultConfig still honours CONSUL_HTTP_TOKEN, CONSUL_HTTP_SSL and
+		// friends; only the address comes from the flag.
+		ccfg := consulapi.DefaultConfig()
+		ccfg.Address = *consulAddr
+		// The agent is local: never route it through HTTP(S)_PROXY, which
+		// the default transport honours (same reasoning as the backend
+		// transports and health probes).
+		ccfg.Transport.Proxy = nil
+		idle = append(idle, ccfg.Transport)
+		client, err := consulapi.NewClient(ccfg)
+		if err != nil {
+			logger.Error("invalid -consul-addr", "addr", *consulAddr, "err", err)
+			return 2
+		}
+		resolver = discovery.NewConsul(client, discovery.ConsulOptions{Logger: logger})
+	}
+	defer func() {
+		for _, tr := range idle {
+			tr.CloseIdleConnections()
+		}
+	}()
+
+	// A private registry, never prometheus.DefaultRegisterer: no global
+	// state, and runGateway can run several times in one test binary.
+	reg := prometheus.NewRegistry()
+	m := metrics.New(reg)
+	opts := proxy.Options{Logger: logger, Getenv: getenv, Metrics: m, Resolver: resolver}
+	if *accessLog {
+		// Same handler as the logs: one JSON stream, lines told apart by
+		// msg "request". The benchmark turns it off with -access-log=false.
+		opts.AccessLogger = logger
 	}
 
 	// Bind both listeners before starting anything, so a port clash fails
@@ -121,13 +244,13 @@ func runWithSource(ctx context.Context, args []string, logOut io.Writer,
 	bgCtx, stopBackground := context.WithCancel(context.Background())
 	defer stopBackground()
 
-	gw := proxy.New(proxy.Options{Logger: logger})
-	src := newSource(*cfgPath, *poll, logger)
+	gw := proxy.New(opts)
 	var shuttingDown atomic.Bool
 
-	// Every goroutine reports at most one error, so a buffer of 3 means no
-	// send ever blocks, even after run has stopped reading.
-	errc := make(chan error, 3)
+	// Every goroutine started below reports at most one error, and there
+	// are at most four of them, so no send ever blocks, even after run has
+	// stopped reading.
+	errc := make(chan error, 4)
 	var traffic, admin, background sync.WaitGroup
 	start := func(wg *sync.WaitGroup, name string, fn func() error) {
 		wg.Add(1)
@@ -154,14 +277,37 @@ func runWithSource(ctx context.Context, args []string, logOut io.Writer,
 		}
 		return nil
 	})
+	if remote != nil {
+		// RemoteSource has no change hook for its connection state, so the
+		// gauge is sampled. In file mode it simply stays 0.
+		start(&background, "config stream gauge", func() error {
+			t := time.NewTicker(streamGaugeInterval)
+			defer t.Stop()
+			for {
+				m.SetConfigStreamConnected(remote.Connected())
+				select {
+				case <-bgCtx.Done():
+					return nil
+				case <-t.C:
+				}
+			}
+		})
+	}
 	start(&traffic, "traffic server", func() error {
 		return proxy.Serve(trafficCtx, trafficLn, gw, *drain, logger)
 	})
 	start(&admin, "admin server", func() error {
-		return proxy.Serve(adminCtx, adminLn, adminHandler(gw, &shuttingDown), adminDrain, logger)
+		return proxy.Serve(adminCtx, adminLn, adminHandler(gw, &shuttingDown, metrics.Handler(reg)), adminDrain, logger)
 	})
-	logger.Info("gateway started", "listen", trafficLn.Addr().String(),
-		"admin_listen", adminLn.Addr().String(), "config", *cfgPath)
+	if remote != nil {
+		logger.Info("gateway started", "listen", trafficLn.Addr().String(),
+			"admin_listen", adminLn.Addr().String(), "control_plane", *cpURL, "node_id", *nodeID,
+			"lkg_path", *lkgPath, "consul_addr", *consulAddr, "access_log", *accessLog)
+	} else {
+		logger.Info("gateway started", "listen", trafficLn.Addr().String(),
+			"admin_listen", adminLn.Addr().String(), "config", *cfgPath,
+			"consul_addr", *consulAddr, "access_log", *accessLog)
+	}
 
 	var errs []error
 	select {
@@ -199,7 +345,8 @@ func runWithSource(ctx context.Context, args []string, logOut io.Writer,
 	traffic.Wait()
 	stopAdmin()
 	admin.Wait()
-	// 3-4. Stop the config watcher and reconcile loop, and wait for them.
+	// 3-4. Stop the config source, the reconcile loop (and with it the
+	//      discovery watches) and the gauge sampler, and wait for them.
 	stopBackground()
 	background.Wait()
 
@@ -216,10 +363,12 @@ func runWithSource(ctx context.Context, args []string, logOut io.Writer,
 	return 0
 }
 
-// adminHandler serves the liveness and readiness probes. They live only on
-// the admin listener, never on the traffic port (section 11 row 19).
-func adminHandler(gw *proxy.Gateway, shuttingDown *atomic.Bool) http.Handler {
+// adminHandler serves the liveness and readiness probes and the metrics.
+// They live only on the admin listener, never on the traffic port (section
+// 11 row 19). /readyz stays 503 until the first config has been applied.
+func adminHandler(gw *proxy.Gateway, shuttingDown *atomic.Bool, metricsHandler http.Handler) http.Handler {
 	mux := http.NewServeMux()
+	mux.Handle("GET /metrics", metricsHandler)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("ok\n"))
 	})

@@ -6,6 +6,7 @@ import (
 	"log"
 	"log/slog"
 	"math"
+	"net"
 	"net/http/httputil"
 	"net/url"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/amitkhanal596/tollgate/internal/auth"
 	"github.com/amitkhanal596/tollgate/internal/balancer"
 	"github.com/amitkhanal596/tollgate/internal/config"
+	"github.com/amitkhanal596/tollgate/internal/discovery"
 	"github.com/amitkhanal596/tollgate/internal/health"
 	"github.com/amitkhanal596/tollgate/internal/ratelimit"
 )
@@ -111,6 +113,21 @@ type builder struct {
 	readFile   func(string) ([]byte, error) // JWT RS256 key file; nil = os.ReadFile
 	logger     *slog.Logger
 	errLog     *log.Logger // bridge for httputil.ReverseProxy.ErrorLog
+	// series receives passive ejections from the route proxies (metrics).
+	series *backendSeries
+	// discovery is true when a Resolver was configured. Without one, consul
+	// upstreams can never get backends, which is worth a warning per build.
+	discovery bool
+}
+
+// endpointLookup returns the latest endpoint set for a discovery query, or
+// nil if none has arrived yet. A nil lookup means no sets at all.
+type endpointLookup func(discovery.Query) []discovery.Endpoint
+
+// consulQuery is the discovery watch key of a consul upstream. Upstreams
+// that differ only in scheme share it, and so share one watch.
+func consulQuery(c *config.ConsulService) discovery.Query {
+	return discovery.Query{Service: c.Service, Tag: c.Tag}
 }
 
 // build turns cfg into a Snapshot. It runs in two passes: the first only
@@ -118,7 +135,11 @@ type builder struct {
 // creates Registry entries and transports and cannot fail. That ordering
 // means a rejected config never leaves half-registered Backends or orphan
 // transports behind.
-func (bd *builder) build(cfg *config.Config) (*Snapshot, error) {
+//
+// eps supplies the endpoint sets of consul upstreams (ADR 0007: the config
+// says what, Consul says where). An upstream whose set has not arrived yet,
+// or is empty, gets no backends, so its routes answer 503.
+func (bd *builder) build(cfg *config.Config, eps endpointLookup) (*Snapshot, error) {
 	urls, err := checkConfig(cfg)
 	if err != nil {
 		return nil, err
@@ -140,24 +161,25 @@ func (bd *builder) build(cfg *config.Config) (*Snapshot, error) {
 	}
 
 	for _, u := range cfg.Upstreams {
-		backends := make([]*balancer.Backend, 0, len(urls[u.Name]))
-		seen := make(map[string]struct{}, len(urls[u.Name]))
-		for _, bu := range urls[u.Name] {
+		baseURLs := urls[u.Name]
+		if u.Consul != nil {
+			baseURLs = bd.discoveredURLs(u, eps)
+		}
+		backends := make([]*balancer.Backend, 0, len(baseURLs))
+		seen := make(map[string]struct{}, len(baseURLs))
+		for _, bu := range baseURLs {
+			// From the Registry, so a backend that stays in the set (static
+			// or discovered) keeps its *Backend: health, ejection and
+			// in-flight state survive the rebuild.
 			b := bd.registry.Get(u.Name, bu)
-			// A backend listed twice would otherwise get double weight.
+			// A backend listed twice (or two Consul instances on one
+			// address) would otherwise get double weight.
 			if _, dup := seen[b.ID]; dup {
 				continue
 			}
 			seen[b.ID] = struct{}{}
 			s.backendIDs[b.ID] = struct{}{}
 			backends = append(backends, b)
-		}
-		if u.Consul != nil {
-			// Phase 5 fills Consul upstreams from discovery. Until then the
-			// set is empty, so its routes answer 503 rather than failing
-			// the whole config.
-			bd.logger.Warn("consul upstreams are not supported yet; upstream has no backends",
-				"upstream", u.Name)
 		}
 		if u.HealthCheck != nil {
 			// Upstreams without a health_check contribute no targets, which
@@ -192,7 +214,7 @@ func (bd *builder) build(cfg *config.Config) (*Snapshot, error) {
 			prefix:         r.PathPrefix,
 			upstream:       upstream,
 			timeouts:       t,
-			proxy:          bd.newRouteProxy(r.Name, bd.transports.get(key), upstream.passive),
+			proxy:          bd.newRouteProxy(r.Name, upstream.name, bd.transports.get(key), upstream.passive),
 			limitKeyPrefix: r.Name + "\x00",
 		}
 		switch r.Auth {
@@ -208,6 +230,37 @@ func (bd *builder) build(cfg *config.Config) (*Snapshot, error) {
 	}
 	s.router = newRouter(routes)
 	return s, nil
+}
+
+// discoveredURLs turns the latest endpoint set of a consul upstream into
+// backend base URLs: the block's scheme (default http) plus each endpoint's
+// "host:port". Duplicate addresses are dropped by the caller (same Registry
+// ID). It never fails: a malformed address is skipped, because one bad
+// Consul registration must not reject the whole config.
+func (bd *builder) discoveredURLs(u config.Upstream, eps endpointLookup) []*url.URL {
+	if !bd.discovery {
+		bd.logger.Warn("upstream uses consul but no discovery resolver is configured (-consul-addr); it has no backends",
+			"upstream", u.Name, "service", u.Consul.Service)
+		return nil
+	}
+	if eps == nil {
+		return nil
+	}
+	scheme := u.Consul.Scheme
+	if scheme == "" {
+		scheme = "http"
+	}
+	set := eps(consulQuery(u.Consul))
+	out := make([]*url.URL, 0, len(set))
+	for _, ep := range set {
+		if host, _, err := net.SplitHostPort(ep.Address); err != nil || host == "" {
+			bd.logger.Warn("skipping discovered endpoint with an invalid address",
+				"upstream", u.Name, "endpoint", ep.ID, "address", ep.Address)
+			continue
+		}
+		out = append(out, &url.URL{Scheme: scheme, Host: ep.Address})
+	}
+	return out
 }
 
 // newBalancer picks the balancing algorithm for an upstream (ADR 0003).
@@ -277,6 +330,18 @@ func checkConfig(cfg *config.Config) (map[string][]*url.URL, error) {
 		case "", config.AlgorithmRoundRobin, config.AlgorithmLeastConn:
 		default:
 			errs = append(errs, fmt.Errorf("upstream %q: unknown algorithm %q", u.Name, u.Algorithm))
+		}
+		if c := u.Consul; c != nil {
+			// A wrong scheme would build unusable backend URLs, and static
+			// backends next to a consul block would be silently ignored.
+			switch {
+			case c.Service == "":
+				errs = append(errs, fmt.Errorf("upstream %q: consul.service is required", u.Name))
+			case c.Scheme != "" && c.Scheme != "http" && c.Scheme != "https":
+				errs = append(errs, fmt.Errorf("upstream %q: consul.scheme must be http or https", u.Name))
+			case len(u.Backends) > 0:
+				errs = append(errs, fmt.Errorf("upstream %q: set either backends or consul, not both", u.Name))
+			}
 		}
 		parsed := make([]*url.URL, 0, len(u.Backends))
 		for _, raw := range u.Backends {

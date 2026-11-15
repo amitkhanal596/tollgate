@@ -18,6 +18,7 @@ import (
 	"github.com/amitkhanal596/tollgate/internal/balancer"
 	"github.com/amitkhanal596/tollgate/internal/config"
 	"github.com/amitkhanal596/tollgate/internal/health"
+	"github.com/amitkhanal596/tollgate/internal/metrics"
 	"github.com/amitkhanal596/tollgate/internal/ratelimit"
 )
 
@@ -45,13 +46,37 @@ const maxRequestIDLen = 128
 
 // ServeHTTP is the data-plane request path (docs/architecture.md section
 // 4): snapshot -> path check -> route match -> auth -> rate limit ->
-// balancer -> proxy -> passive health. It takes no locks: the snapshot is
-// one atomic load, and the limiters and Backends are concurrency-safe.
+// balancer -> proxy -> passive health, then metrics and the access log
+// (step 7). It takes no locks: the snapshot is one atomic load, and the
+// limiters, Backends and metric vectors are concurrency-safe.
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// One allocation holds everything this request needs to remember: the
+	// proxy state the ReverseProxy hooks read, and the status/bytes recorder.
+	ex := &exchange{}
 	// The ID is put on the response by writeError and ModifyResponse, not
 	// here: ReverseProxy clears the response header map after relaying a
 	// 1xx (e.g. 103 Early Hints), which would silently drop an early Set.
-	reqID := requestID(r.Header.Get(HeaderRequestID))
+	ex.st.requestID = requestID(r.Header.Get(HeaderRequestID))
+	if g.observing {
+		ex.start = time.Now()
+		ex.rec.ResponseWriter = w
+		w = &ex.rec
+		// Deferred, and without recover: it runs on every exit path,
+		// including ReverseProxy's http.ErrAbortHandler panic when a body
+		// copy fails mid-stream, and the panic then continues unchanged
+		// (net/http still aborts the connection, and any other panic keeps
+		// its original stack trace).
+		defer g.record(ex, r)
+	}
+	g.serve(w, r, &ex.st)
+}
+
+// serve is ServeHTTP without the bookkeeping. st already carries the
+// request ID; serve fills in what it learns (route, upstream, backend,
+// client ID, snapshot version) as it goes, so the record is right whichever
+// exit is taken.
+func (g *Gateway) serve(w http.ResponseWriter, r *http.Request, st *proxyState) {
+	reqID := st.requestID
 
 	// One atomic load; this request uses this snapshot until it finishes,
 	// even if a reload swaps in a newer one meanwhile (ADR 0002). That
@@ -62,6 +87,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, reqID)
 		return
 	}
+	st.version = s.Version
 
 	// Requests the proxy could never forward are refused here, before the
 	// balancer, so they cannot take an in-flight slot or be blamed on a
@@ -92,9 +118,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, reqID)
 		return
 	}
-
-	// Allocated once and shared by admission and the ReverseProxy hooks.
-	st := &proxyState{requestID: reqID, route: route.name}
+	st.route, st.upstream = route.name, route.upstream.name
 
 	// Steps 2-3. Both run before the balancer, so a rejected request never
 	// takes a round-robin turn or an in-flight slot.
@@ -106,7 +130,8 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	b, err := lb.Next()
 	if err != nil {
 		// ErrNoHealthyBackends is the only error Next returns (every
-		// backend down or ejected); 503 tells clients it is temporary.
+		// backend down or ejected, or a discovered upstream with no
+		// endpoints yet); 503 tells clients it is temporary.
 		g.logger.Warn("no healthy backend",
 			"request_id", reqID, "route", route.name, "upstream", route.upstream.name, "err", err)
 		st.setRateLimitHeaders(w.Header())
@@ -142,6 +167,103 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	route.proxy.ServeHTTP(w, out)
 }
 
+// exchange is the per-request state, allocated once in ServeHTTP.
+type exchange struct {
+	st    proxyState
+	rec   recorder  // wraps the client's writer only when observing
+	start time.Time // set only when observing
+}
+
+// record emits the request's metrics and access-log line (section 4 step
+// 7). It runs exactly once per request, from ServeHTTP's defer.
+func (g *Gateway) record(ex *exchange, r *http.Request) {
+	d := time.Since(ex.start)
+	st := &ex.st
+	status := ex.rec.status
+	if status == 0 {
+		// Nothing was written: net/http answers an empty 200 on a normal
+		// return (on a panic the connection is cut, but there is no better
+		// code to report for a response that never started).
+		status = http.StatusOK
+	}
+	// Names only (never paths, queries or client IDs): bounded cardinality.
+	// An unmatched request has empty names, which metrics maps to "none".
+	g.metrics.ObserveRequest(st.route, st.upstream, status, d)
+	if g.accessLog == nil {
+		return
+	}
+	var backend string
+	if st.backend != nil {
+		backend = st.backend.ID
+	}
+	remoteIP, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		remoteIP = r.RemoteAddr // no port (e.g. a unix socket); log it as-is
+	}
+	// No headers, no query string, no credentials: Path excludes the query,
+	// and ClientID is only ever an authenticated identity.
+	metrics.LogAccess(r.Context(), g.accessLog, metrics.AccessRecord{
+		RequestID:     st.requestID,
+		Method:        r.Method,
+		Host:          r.Host,
+		Path:          r.URL.Path,
+		Route:         st.route,
+		Upstream:      st.upstream,
+		Backend:       backend,
+		ClientID:      st.clientID,
+		RemoteIP:      remoteIP,
+		Status:        status,
+		Duration:      d,
+		BytesOut:      ex.rec.bytes,
+		ConfigVersion: st.version,
+	})
+}
+
+// recorder captures the final status and the body bytes written to the
+// client. It forwards Flush and exposes Unwrap, so streaming (ReverseProxy
+// flushes through http.ResponseController) and Hijack for protocol
+// upgrades keep working through it. Only the request's own goroutine
+// writes to it, so its fields need no synchronisation.
+type recorder struct {
+	http.ResponseWriter
+	status int
+	bytes  int64
+}
+
+func (rw *recorder) WriteHeader(code int) {
+	// 1xx responses (103 Early Hints) are interim; the final status comes
+	// later. 101 Switching Protocols is final for an upgrade.
+	if rw.status == 0 && (code >= 200 || code == http.StatusSwitchingProtocols) {
+		rw.status = code
+	}
+	rw.ResponseWriter.WriteHeader(code)
+}
+
+func (rw *recorder) Write(p []byte) (int, error) {
+	if rw.status == 0 {
+		rw.status = http.StatusOK // net/http's implicit WriteHeader(200)
+	}
+	n, err := rw.ResponseWriter.Write(p)
+	rw.bytes += int64(n)
+	return n, err
+}
+
+// FlushError is what http.ResponseController.Flush calls first, so an
+// unsupported or failed flush is reported instead of swallowed.
+func (rw *recorder) FlushError() error {
+	if rw.status == 0 {
+		rw.status = http.StatusOK // flushing commits an implicit 200
+	}
+	return http.NewResponseController(rw.ResponseWriter).Flush()
+}
+
+// Flush implements http.Flusher for callers that type-assert it.
+func (rw *recorder) Flush() { _ = rw.FlushError() }
+
+// Unwrap lets http.ResponseController reach the underlying writer
+// (Hijack, SetReadDeadline, ...).
+func (rw *recorder) Unwrap() http.ResponseWriter { return rw.ResponseWriter }
+
 // proxyState is what the shared per-route ReverseProxy hooks need to know
 // about the current request. It travels in the request context because one
 // ReverseProxy serves many concurrent requests. Its plain fields are only
@@ -152,9 +274,15 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 type proxyState struct {
 	backend   *balancer.Backend
 	requestID string
-	route     string
-	// clientID is the authenticated identity; "" on auth: none routes,
-	// where nothing identifies the client to the upstream.
+	// route and upstream are the matched names ("" until a route matched);
+	// version is the snapshot's config version (0 when not ready). They
+	// exist for metrics and the access log.
+	route    string
+	upstream string
+	version  int64
+	// clientID is the authenticated identity of an ADMITTED request; ""
+	// on auth: none routes, where nothing identifies the client to the
+	// upstream, and on requests rejected by auth or the rate limit.
 	clientID string
 	// rl is the route's rate-limit decision, valid when limited is true.
 	rl      ratelimit.Decision
@@ -198,16 +326,18 @@ func (st *proxyState) setRateLimitHeaders(h http.Header) {
 // routeHooks are the ReverseProxy callbacks of one route. They hold only
 // per-route settings; per-request data comes from the proxyState.
 type routeHooks struct {
-	route   string
-	passive *config.PassiveHealth // nil = passive health off for this upstream
-	now     func() time.Time
-	logger  *slog.Logger
+	route    string
+	upstream string
+	passive  *config.PassiveHealth // nil = passive health off for this upstream
+	now      func() time.Time
+	logger   *slog.Logger
+	series   *backendSeries // counts ejections; never nil
 }
 
 // newRouteProxy builds the ReverseProxy for one route. It holds no
 // per-request state, so concurrent requests share it safely.
-func (bd *builder) newRouteProxy(route string, transport http.RoundTripper, passive *config.PassiveHealth) *httputil.ReverseProxy {
-	h := &routeHooks{route: route, passive: passive, now: bd.now, logger: bd.logger}
+func (bd *builder) newRouteProxy(route, upstream string, transport http.RoundTripper, passive *config.PassiveHealth) *httputil.ReverseProxy {
+	h := &routeHooks{route: route, upstream: upstream, passive: passive, now: bd.now, logger: bd.logger, series: bd.series}
 	return &httputil.ReverseProxy{
 		Rewrite: rewrite,
 		// The wrapper is where passive health learns each attempt's outcome.
@@ -249,10 +379,13 @@ func (h *routeHooks) observe(st *proxyState, status int, err error) {
 		return
 	}
 	st.observed = true
+	// ObservePassive ejects with a CAS, so exactly one caller sees true per
+	// ejection: one log line and one counter increment.
 	if health.ObservePassive(st.backend, *h.passive, status, err, h.now()) {
 		h.logger.Warn("backend ejected after consecutive failures",
-			"route", h.route, "backend", st.backend.ID, "request_id", st.requestID,
+			"route", h.route, "upstream", h.upstream, "backend", st.backend.ID, "request_id", st.requestID,
 			"cooloff", time.Duration(h.passive.Cooloff).String())
+		h.series.ejected(st.backend)
 	}
 }
 

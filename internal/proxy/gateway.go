@@ -17,7 +17,9 @@ import (
 
 	"github.com/amitkhanal596/tollgate/internal/balancer"
 	"github.com/amitkhanal596/tollgate/internal/config"
+	"github.com/amitkhanal596/tollgate/internal/discovery"
 	"github.com/amitkhanal596/tollgate/internal/health"
+	"github.com/amitkhanal596/tollgate/internal/metrics"
 	"github.com/amitkhanal596/tollgate/internal/ratelimit"
 )
 
@@ -70,6 +72,15 @@ type Options struct {
 	// failed-auth throttle; injected limiters are not affected). 0 means
 	// ratelimit.DefaultMaxKeys.
 	LimiterMaxKeys int
+
+	// Metrics receives the data-plane metrics. Nil: no metrics.
+	Metrics *metrics.Metrics
+	// AccessLogger receives one metrics.LogAccess line per request. Nil: no
+	// access log.
+	AccessLogger *slog.Logger
+	// Resolver supplies the backends of upstreams with `consul:`. Nil: such
+	// upstreams have no backends (503) and a warning is logged.
+	Resolver discovery.Resolver
 }
 
 // Failed-auth throttle policy (ADR 0004, architecture.md section 11 row 10).
@@ -123,6 +134,19 @@ type Gateway struct {
 	// running enforces the single-writer rule: a second concurrent Run
 	// would race the first one on Store and Prune.
 	running atomic.Bool
+
+	// resolver feeds consul upstreams; nil means they have no backends.
+	resolver discovery.Resolver
+
+	// metrics and accessLog may each be nil (off). observing is true if
+	// either is set: only then does ServeHTTP wrap the ResponseWriter and
+	// record the request.
+	metrics   *metrics.Metrics
+	accessLog *slog.Logger
+	observing bool
+	// series keeps the per-backend metric series in step with the live
+	// snapshot; never nil (a no-op when metrics is nil).
+	series *backendSeries
 }
 
 // New returns a Gateway with no config. It serves 503 until Run applies the
@@ -144,6 +168,11 @@ func New(opts Options) *Gateway {
 		limiter:     opts.Limiter,
 		anonLimiter: opts.Limiter,
 		authLimiter: opts.AuthLimiter,
+		resolver:    opts.Resolver,
+		metrics:     opts.Metrics,
+		accessLog:   opts.AccessLogger,
+		observing:   opts.Metrics != nil || opts.AccessLogger != nil,
+		series:      &backendSeries{m: opts.Metrics},
 	}
 	// own creates a limiter the Gateway owns: Run sweeps it.
 	own := func() *ratelimit.TokenBucket {
@@ -157,9 +186,13 @@ func New(opts Options) *Gateway {
 	if g.authLimiter == nil {
 		g.authLimiter = own()
 	}
+	series := g.series
 	g.checker = health.NewChecker(opts.HealthClient, now, func(b *balancer.Backend, up bool) {
 		// Runs on the probe goroutine; logging is concurrency-safe and quick.
 		logger.Info("backend active health changed", "backend", b.ID, "up", up)
+		// Ignored for backends no longer in the live snapshot, so the
+		// reset-to-up of a removed backend cannot resurrect its series.
+		series.activeChanged(b)
 	})
 	g.builder = &builder{
 		registry:   g.registry,
@@ -170,6 +203,8 @@ func New(opts Options) *Gateway {
 		readFile:   opts.ReadFile,
 		logger:     logger,
 		errLog:     slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
+		series:     g.series,
+		discovery:  opts.Resolver != nil,
 	}
 	return g
 }
@@ -189,18 +224,24 @@ func (g *Gateway) Version() int64 {
 }
 
 // Run is the reconcile loop: it watches src and applies every config it
-// delivers. It is the only goroutine that writes the snapshot, the Registry
-// and the transport pool, and the only caller of Checker.Sync.
+// delivers, and it owns the discovery watches of the live config and
+// rebuilds the snapshot whenever one of them reports a new endpoint set
+// (same config, no new version). It is the only goroutine that writes the
+// snapshot, the Registry, the transport pool and the watch state, and the
+// only caller of Checker.Sync and of the source's Acknowledger methods.
 //
 // Run also owns the Gateway's background goroutines for exactly its own
-// lifetime: the health Checker (and through it every probe) and the
-// idle-bucket sweepers of the limiters the Gateway created itself.
+// lifetime: the health Checker (and through it every probe), the
+// idle-bucket sweepers of the limiters the Gateway created itself, the
+// in-flight sampler (if metrics are on) and one forwarder per discovery
+// watch.
 //
 // Run returns nil when ctx is canceled or src closes its channel, and the
 // Watch error if src cannot start at all (in which case it started
-// nothing). Before returning it stops the Checker and sweepers, waits for
-// all of them to exit, and closes idle upstream connections, so nothing it
-// started outlives it; requests still in flight keep working.
+// nothing). Before returning it cancels every watch and waits for every
+// forwarder, stops the Checker, sweepers and sampler and waits for them,
+// and closes idle upstream connections, so nothing it started outlives it;
+// requests still in flight keep working.
 func (g *Gateway) Run(ctx context.Context, src config.ConfigSource) error {
 	if !g.running.CompareAndSwap(false, true) {
 		return errors.New("proxy: Run is already running")
@@ -213,7 +254,8 @@ func (g *Gateway) Run(ctx context.Context, src config.ConfigSource) error {
 	}
 
 	// Shutdown order, via LIFO defers: the loop below has returned (so no
-	// further Sync), then cancel the workers, wait for every one of them
+	// further Sync and no new watch), then cancel every watch and wait for
+	// its forwarder, then cancel the workers and wait for every one of them
 	// (the Checker waits for its probes), and only then close idle upstream
 	// connections. Sync never races this: it is called only from this
 	// goroutine, and even a late Sync is a non-blocking store.
@@ -223,21 +265,30 @@ func (g *Gateway) Run(ctx context.Context, src config.ConfigSource) error {
 	defer wg.Wait()
 	defer stopBackground()
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	// spawn runs fn on a goroutine tracked by wg; fn must return once
+	// bgCtx is done.
+	spawn := func(fn func()) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			fn()
+		}()
+	}
+	spawn(func() {
 		// Only fails if already running, which g.running rules out.
 		if err := g.checker.Run(bgCtx); err != nil {
 			g.logger.Error("health checker stopped", "err", err)
 		}
-	}()
+	})
 	for _, tb := range g.sweepers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			_ = tb.Run(bgCtx) // returns nil once bgCtx is done
-		}()
+		spawn(func() { _ = tb.Run(bgCtx) }) // returns nil once bgCtx is done
 	}
+	if g.metrics != nil {
+		spawn(func() { g.series.runSampler(bgCtx) })
+	}
+
+	rc := newReconciler(bgCtx, g, src)
+	defer rc.stopWatches()
 
 	for {
 		select {
@@ -249,26 +300,56 @@ func (g *Gateway) Run(ctx context.Context, src config.ConfigSource) error {
 			if !ok {
 				return nil
 			}
-			g.apply(cfg)
+			rc.applyConfig(cfg)
+		case u := <-rc.updates:
+			rc.applyEndpoints(u)
 		}
 	}
 }
 
-// apply builds a snapshot for cfg and swaps it in. On a build error the
-// current snapshot stays live (last known good).
-func (g *Gateway) apply(cfg *config.Config) {
-	start := time.Now()
-	s, err := g.builder.build(cfg)
-	if err != nil {
-		version := int64(0)
-		if cfg != nil {
-			version = cfg.Version
-		}
+// apply builds a snapshot for cfg with no discovered endpoints and swaps it
+// in, outside of Run (tests use it to set up a Gateway synchronously). On a
+// build error the current snapshot stays live (last known good).
+func (g *Gateway) apply(cfg *config.Config) error {
+	if _, err := g.rebuild(cfg, nil, "config"); err != nil {
 		g.logger.Error("config rejected; keeping current config",
-			"version", version, "current_version", g.Version(), "err", err)
-		return
+			"version", cfgVersion(cfg), "current_version", g.Version(), "err", err)
+		return err
 	}
+	return nil
+}
 
+func cfgVersion(cfg *config.Config) int64 {
+	if cfg == nil {
+		return 0
+	}
+	return cfg.Version
+}
+
+// rebuild builds a snapshot from cfg and the endpoint sets and, if that
+// succeeds, installs it. trigger ("config" or "discovery") is for the log.
+func (g *Gateway) rebuild(cfg *config.Config, eps endpointLookup, trigger string) (*Snapshot, error) {
+	start := time.Now()
+	s, err := g.builder.build(cfg, eps)
+	if err != nil {
+		return nil, err
+	}
+	removed := g.install(s)
+	g.logger.Info("config applied",
+		"trigger", trigger,
+		"version", s.Version,
+		"routes", len(cfg.Routes),
+		"upstreams", len(cfg.Upstreams),
+		"backends", len(s.backendIDs),
+		"backends_removed", len(removed),
+		"health_targets", len(s.healthTargets),
+		"build_duration", time.Since(start).String())
+	return s, nil
+}
+
+// install swaps s in and brings the long-lived state in line with it. It
+// returns the backends the Registry dropped.
+func (g *Gateway) install(s *Snapshot) (removed []*balancer.Backend) {
 	// The swap. From here on new requests see s; requests already running
 	// keep the snapshot they loaded and finish on it, with its routes, auth
 	// rules and limits.
@@ -282,8 +363,14 @@ func (g *Gateway) apply(cfg *config.Config) {
 	// back by a later config, Registry.Get creates a fresh Backend with
 	// reset health and in-flight state, while the stragglers decrement the
 	// old object, so the new count never goes negative.
-	removed := g.registry.Prune(s.backendIDs)
+	removed = g.registry.Prune(s.backendIDs)
 	g.transports.retain(s.transportKeys)
+
+	// Forget the pruned backends' series and switch the metrics' live set
+	// BEFORE Sync: Sync stops the probes of removed backends, whose last
+	// act is a reset-to-up callback, and that callback must already find
+	// them gone or it would recreate the series just deleted.
+	g.series.swap(s, removed)
 
 	// Always pass the full current set: the Checker diffs by *Backend
 	// pointer, so pruned or re-added backends and upstreams that lost their
@@ -291,12 +378,6 @@ func (g *Gateway) apply(cfg *config.Config) {
 	// never blocks, and is fine before the Checker's Run has started.
 	g.checker.Sync(s.healthTargets)
 
-	g.logger.Info("config applied",
-		"version", s.Version,
-		"routes", len(cfg.Routes),
-		"upstreams", len(cfg.Upstreams),
-		"backends", len(s.backendIDs),
-		"backends_removed", len(removed),
-		"health_targets", len(s.healthTargets),
-		"build_duration", time.Since(start).String())
+	g.metrics.SetConfigVersion(s.Version)
+	return removed
 }
