@@ -7,9 +7,9 @@
 // The proxy maps config.ConsulService to a Query and Endpoints to backend
 // URLs.
 //
-// Planned constructor (Phase 5):
+// Constructor:
 //
-//	func NewConsul(client *consulapi.Client, logger *slog.Logger) *Consul // implements Resolver
+//	func NewConsul(client *consulapi.Client, opts ConsulOptions) *Consul // implements Resolver
 package discovery
 
 import "context"
