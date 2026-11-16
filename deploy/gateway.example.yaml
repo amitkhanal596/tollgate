@@ -37,7 +37,7 @@ routes:
 
 upstreams:
   - name: users
-    algorithm: round_robin    # least_conn arrives in Phase 2
+    algorithm: round_robin    # or least_conn (see docs/adr/0003)
     backends:
       - http://127.0.0.1:9001
       - http://127.0.0.1:9002

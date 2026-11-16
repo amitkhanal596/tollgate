@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 #
-# One Dockerfile, four runnable targets: gateway, controlplane, demo (and the
+# One Dockerfile, three runnable targets: gateway, controlplane, demo (plus the
 # shared build stage). Build context is the repository root:
 #
 #   docker build -f deploy/Dockerfile --target gateway -t tollgate/gateway .
