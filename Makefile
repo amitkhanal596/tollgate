@@ -6,7 +6,7 @@ GOLANGCI_LINT_VERSION := v2.15.0
 DEMO_KEY  := demo-api-key-tollgate-0001
 ADMIN_TOK := DEMO-ONLY-admin-token-0123456789abcdef-change-me
 
-.PHONY: help test cover lint build images up down demo logs bench bench-all chaos bench-up bench-down
+.PHONY: help test cover lint build images up down demo logs bench bench-all chaos bench-up bench-down bench-test
 
 help:
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/'
@@ -54,6 +54,9 @@ demo: ## a few requests showing routing, auth and rate limiting
 	@echo "--- control plane: connected gateways"; \
 	curl -s -H 'Authorization: Bearer $(ADMIN_TOK)' 127.0.0.1:9000/v1/dataplanes; echo
 	@echo "Grafana http://127.0.0.1:3000  Prometheus http://127.0.0.1:9091  Consul http://127.0.0.1:8500"
+
+bench-test: ## unit tests for the benchmark analysis scripts (no Docker needed)
+	python3 -m unittest discover -s bench/tests -v
 
 bench-up: ## start the benchmark stack (project tollgate-bench, access log off) and wait until it works
 	bench/stack.sh up

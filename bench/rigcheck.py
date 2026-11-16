@@ -64,24 +64,32 @@ def pre():
     return r
 
 
-def post(pre_path, start, end, out):
-    start, end = float(start), float(end)
+def parse_sleep_events(text, start, end, slack=5):
+    """Sleep/Wake/DarkWake lines of `pmset -g log` text whose time is inside [start-slack, end+slack] (epoch s)."""
     ev = []
     # lines look like: 2026-11-16 05:36:26 -0800 Sleep   Entering Sleep state due to ...
     rx = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d [+-]\d{4})\s+(Sleep|Wake|DarkWake)\b(.*)$")
-    for line in sh("pmset -g log", 120).splitlines():
+    for line in text.splitlines():
         m = rx.match(line)
         if not m:
             continue
         t = datetime.datetime.strptime(m[1], "%Y-%m-%d %H:%M:%S %z").timestamp()
-        if start - 5 <= t <= end + 5:
+        if start - slack <= t <= end + slack:
             ev.append({"time": m[1], "event": m[2], "detail": m[3].strip()[:120]})
-    res = json.load(open(pre_path))
+    return ev
+
+
+def post(pre_path, start, end, out):
+    start, end = float(start), float(end)
+    ev = parse_sleep_events(sh("pmset -g log", 120), start, end)
+    with open(pre_path) as fh:
+        res = json.load(fh)
     res["sleep_wake_events"] = ev
     res["valid"] = not ev
     res["window_utc"] = [datetime.datetime.fromtimestamp(start, datetime.timezone.utc).isoformat(),
                          datetime.datetime.fromtimestamp(end, datetime.timezone.utc).isoformat()]
-    json.dump(res, open(out, "w"), indent=2)
+    with open(out, "w") as fh:
+        json.dump(res, fh, indent=2)
     print(f"rig validity: {'VALID' if res['valid'] else 'INVALID, sleep/wake events in the run window'}", file=sys.stderr)
     return 0
 
@@ -89,7 +97,8 @@ def post(pre_path, start, end, out):
 if __name__ == "__main__":
     if len(sys.argv) == 3 and sys.argv[1] == "pre":
         r = pre()
-        json.dump(r, open(sys.argv[2], "w"), indent=2)
+        with open(sys.argv[2], "w") as fh:
+            json.dump(r, fh, indent=2)
         if r["warnings"]:
             bar = "!" * 72
             print(bar, file=sys.stderr)

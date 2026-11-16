@@ -62,7 +62,8 @@ def dist(vals):
 
 
 def main(log, raw_path, out):
-    raw = json.load(open(raw_path))
+    with open(raw_path) as fh:
+        raw = json.load(fh)
     c = raw["config"]
     limit, burst, dur = c["rate_limit_rps"], c["burst"], c["duration_s"]
     per_key, polite_rps, nk = c["offered_per_key_rps"], c["polite_rps"], c["noisy_keys"]

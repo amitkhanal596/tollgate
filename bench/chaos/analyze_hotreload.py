@@ -31,7 +31,8 @@ def main(log, raw_path, out):
             elif len(p) == 7 and p[0] == "C":
                 changes.append({"i": int(p[1]), "kind": p[2], "rollback": p[3] == "1",
                                 "sent": float(p[4]), "returned": float(p[5]), "seen": float(p[6])})
-    raw = json.load(open(raw_path))
+    with open(raw_path) as fh:
+        raw = json.load(fh)
     # Per change: window that a request must fully contain.
     wins = []
     for c in changes:

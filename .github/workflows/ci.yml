@@ -55,6 +55,8 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go vet ./...
+      - name: Benchmark analysis unit tests
+        run: python3 -m unittest discover -s bench/tests -v
       - name: Test with the race detector
         # -coverpkg makes tests in cmd/ count towards internal/ coverage.
         run: go test -race -coverprofile=coverage.out -coverpkg=./internal/... ./...

@@ -254,7 +254,10 @@ def cmd_meta(raw, part, complete):
     plans = {}
     for p in sorted(glob.glob(os.path.join(raw, "maxrps-plan*.json"))):
         plans[os.path.basename(p)[len("maxrps-plan"):-5].lstrip("-") or "main"] = load(p)
-    failed = [l.strip() for l in open(os.path.join(raw, "failed.txt"))] if os.path.exists(os.path.join(raw, "failed.txt")) else []
+    failed = []
+    if os.path.exists(os.path.join(raw, "failed.txt")):
+        with open(os.path.join(raw, "failed.txt")) as fh:
+            failed = [l.strip() for l in fh]
     meta = {
         "part": part,
         "timestamp_utc": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -303,13 +306,14 @@ def group_of(name):
 def read_stall(path):
     out = {}
     if os.path.exists(path):
-        for line in open(path):
-            p = line.split()
-            if len(p) == 2:
-                try:
-                    out[int(p[0])] = float(p[1])
-                except ValueError:
-                    pass
+        with open(path) as fh:
+            for line in fh:
+                p = line.split()
+                if len(p) == 2:
+                    try:
+                        out[int(p[0])] = float(p[1])
+                    except ValueError:
+                        pass
     return out
 
 
@@ -321,19 +325,20 @@ def read_netwatch(raw):
 
 
 def k6_warnings(path):
-    """[(epoch_ms, message)] for 'Insufficient VUs' style warnings in k6's own log."""
+    """[epoch_ms] of 'Insufficient VUs' style warnings in k6's own log."""
     out = []
     if os.path.exists(path):
-        for line in open(path, errors="replace"):
-            if "Insufficient VUs" not in line and "dropped" not in line.lower():
-                continue
-            m = re.search(r'time="([^"]+)"', line)
-            if m and "Insufficient VUs" in line:
-                try:
-                    t = datetime.datetime.fromisoformat(m[1].replace("Z", "+00:00")).timestamp() * 1000
-                    out.append(t)
-                except ValueError:
-                    pass
+        with open(path, errors="replace") as fh:
+            for line in fh:
+                if "Insufficient VUs" not in line and "dropped" not in line.lower():
+                    continue
+                m = re.search(r'time="([^"]+)"', line)
+                if m and "Insufficient VUs" in line:
+                    try:
+                        t = datetime.datetime.fromisoformat(m[1].replace("Z", "+00:00")).timestamp() * 1000
+                        out.append(t)
+                    except ValueError:
+                        pass
     return out
 
 
@@ -469,6 +474,43 @@ def aggregate_maxrps(runs):
 # ----------------------------------------------------------------------------
 # merge
 # ----------------------------------------------------------------------------
+def completeness(secs):
+    """(provenance summary, blockers) for the sections dict. `complete` is true iff there are no blockers."""
+    blockers = []
+    prov = []
+    for s in ("bench", "chaos"):
+        sec = secs.get(s)
+        if not sec:
+            blockers.append(f"section '{s}' is missing")
+            continue
+        if sec["smoke"]:
+            blockers.append(f"section '{s}' is a smoke run")
+        if not sec["complete"]:
+            blockers.append(f"section '{s}' had failed measurements: {', '.join(sec['failed']) or 'unknown'}")
+        if not (sec.get("rig") or {}).get("valid", False):
+            blockers.append(f"section '{s}' is invalid (sleep/wake events during the run, or no validity record)")
+        if not sec["provenance"]:
+            blockers.append(f"section '{s}' has no provenance record")
+        if any(r["git_dirty"] for r in sec["provenance"]):
+            blockers.append(f"section '{s}' was built from a tree with modified tracked files (dirty): the commit does not describe the images")
+        prov += sec["provenance"]
+    heads = {r["git_head"] for r in prov}
+    if len(heads) > 1:
+        blockers.append(f"sections come from different commits: {sorted(h[:9] for h in heads)}")
+    for img in ("gateway", "controlplane", "demo"):
+        ids = {r["images"][img] for r in prov}
+        if len(ids) > 1:
+            blockers.append(f"{img} image differs between brings-up")
+    summary = {
+        "git_head": sorted(heads)[0] if len(heads) == 1 else None,
+        "git_dirty": any(r["git_dirty"] for r in prov),
+        "images": {img: (sorted({r["images"][img] for r in prov})[0] if len({r["images"][img] for r in prov}) == 1 else None)
+                   for img in ("gateway", "controlplane", "demo")},
+        "records": prov,
+    }
+    return summary, blockers
+
+
 def cmd_merge(raw, out, part):
     res = {}
     if part != "all" and os.path.exists(out):
@@ -523,38 +565,8 @@ def cmd_merge(raw, out, part):
     res["generated_by"] = part
     res["smoke"] = any(s["smoke"] for s in secs.values())
     res["knobs"] = meta["knobs"]
-    blockers = []
-    prov = []
-    for s in ("bench", "chaos"):
-        sec = secs.get(s)
-        if not sec:
-            blockers.append(f"section '{s}' is missing")
-            continue
-        if sec["smoke"]:
-            blockers.append(f"section '{s}' is a smoke run")
-        if not sec["complete"]:
-            blockers.append(f"section '{s}' had failed measurements: {', '.join(sec['failed']) or 'unknown'}")
-        if not (sec.get("rig") or {}).get("valid", False):
-            blockers.append(f"section '{s}' is invalid (sleep/wake events during the run, or no validity record)")
-        if not sec["provenance"]:
-            blockers.append(f"section '{s}' has no provenance record")
-        prov += sec["provenance"]
-    heads = {r["git_head"] for r in prov}
-    if len(heads) > 1:
-        blockers.append(f"sections come from different commits: {sorted(h[:9] for h in heads)}")
-    for img in ("gateway", "controlplane", "demo"):
-        ids = {r["images"][img] for r in prov}
-        if len(ids) > 1:
-            blockers.append(f"{img} image differs between brings-up")
-    res["provenance"] = {
-        "git_head": sorted(heads)[0] if len(heads) == 1 else None,
-        "git_dirty": any(r["git_dirty"] for r in prov),
-        "images": {img: (sorted({r["images"][img] for r in prov})[0] if len({r["images"][img] for r in prov}) == 1 else None)
-                   for img in ("gateway", "controlplane", "demo")},
-        "records": prov,
-    }
-    res["complete"] = not blockers
-    res["complete_blockers"] = blockers
+    res["provenance"], res["complete_blockers"] = completeness(secs)
+    res["complete"] = not res["complete_blockers"]
     with open(out, "w") as fh:
         json.dump(res, fh, indent=2)
         fh.write("\n")
