@@ -1,13 +1,14 @@
 # Tollgate developer tasks. `make help` lists them.
 COMPOSE   := docker compose -f deploy/compose/docker-compose.yml
 COVER_MIN := 80
+BENCH_COMPOSE := docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.bench.yml
 DEMO_KEY  := demo-api-key-tollgate-0001
 ADMIN_TOK := DEMO-ONLY-admin-token-0123456789abcdef-change-me
 
-.PHONY: help test cover lint build images up down demo logs
+.PHONY: help test cover lint build images up down demo logs bench bench-all chaos bench-up bench-down
 
 help:
-	@grep -E '^[a-z]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/'
+	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/'
 
 test: ## go vet + go test -race
 	go vet ./...
@@ -52,3 +53,18 @@ demo: ## a few requests showing routing, auth and rate limiting
 	@echo "--- control plane: connected gateways"; \
 	curl -s -H 'Authorization: Bearer $(ADMIN_TOK)' 127.0.0.1:9000/v1/dataplanes; echo
 	@echo "Grafana http://127.0.0.1:3000  Prometheus http://127.0.0.1:9091  Consul http://127.0.0.1:8500"
+
+bench-up: ## start the benchmark stack (access log off) and wait until it works
+	$(BENCH_COMPOSE) up -d --build --wait
+
+bench-down: ## stop the benchmark stack and delete its volumes
+	$(BENCH_COMPOSE) down -v --remove-orphans
+
+bench: ## overhead, max RPS and limiter accuracy (~15 min); results in bench/results/
+	bench/run-all.sh bench
+
+chaos: ## failover and hot-reload chaos tests (~9 min); results in bench/results/
+	bench/run-all.sh chaos
+
+bench-all: ## bench + chaos (~25 min)
+	bench/run-all.sh all

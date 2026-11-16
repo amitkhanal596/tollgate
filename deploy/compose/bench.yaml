@@ -1,0 +1,125 @@
+# Benchmark seed for the control plane (version 1). Used only by
+# docker-compose.bench.yml. DEMO-ONLY keys: bench-key-NN-tollgate-load-test
+# (NN = 00..09), stored as sha256. bench/k6/*.js derive the same strings.
+defaults:
+  timeouts:
+    dial: 1s
+    response_header: 5s
+    request: 30s
+
+auth:
+  api_keys:
+    - client_id: bench-client-00
+      sha256: e4ebb4cf6ede2bac80538464c852a7d1a69006d4f114f41c9fe7b2053f6097b3
+    - client_id: bench-client-01
+      sha256: 1ecbf87158b36ff6d35060106ebfd963233023105eed5d24a45d112dea933b6b
+    - client_id: bench-client-02
+      sha256: 414d0de3755b43e533055c825d0be00c3eef6ce509c0c2fe34d3b683b2fe96ce
+    - client_id: bench-client-03
+      sha256: f4a336552ae3a85b44c25026d8c93692cb8d0fbd5664112d4a10ebf638ffc4c3
+    - client_id: bench-client-04
+      sha256: c50427c0d73d2dc503ad7a3adb9a5d20860934ebb133eb31690b828bb5b0a4d5
+    - client_id: bench-client-05
+      sha256: d9f0da323b3f6ef4255654ba3f78d565d84cb0b5c04528fcb7d99e6d8658c179
+    - client_id: bench-client-06
+      sha256: d6d8bcf12c4a1be32d9a30b22cf80d6e307d02dd698ce2ce821d719a181fa942
+    - client_id: bench-client-07
+      sha256: fae3861e7b3e2ae71aed760e4e38da105700a9ec57a4e9d380c50fe3a2b45556
+    - client_id: bench-client-08
+      sha256: 7ed00b232f070af39e5e8278a5e0f6c2b6a7d1c31860e2a7d98e07f1e6a920ff
+    - client_id: bench-client-09
+      sha256: 0b214d8aa37fbea14ec2dbad2c3836b9db645f6bea34a15c6467bc597fc5569c
+
+routes:
+  # Overhead / max RPS: no auth, no rate limit, one backend (demo-1), so the
+  # gateway path can be compared with a direct request to http://demo-1:8080.
+  - name: bare
+    path_prefix: /bare
+    upstream: single
+
+  # Same, but round robin over all three backends (gateway scaling, not the backend ceiling).
+  - name: bare3
+    path_prefix: /bare3
+    upstream: static3
+
+  # Auth cost only: api_key check, no rate limit.
+  - name: authed
+    path_prefix: /authed
+    upstream: single
+    auth: api_key
+
+  # Limiter accuracy: 100 req/s sustained, burst 100, per client.
+  - name: limited
+    path_prefix: /limited
+    upstream: single
+    auth: api_key
+    rate_limit:
+      requests_per_second: 100
+      burst: 100
+
+  # Hot reload test: the script flips this route between flip-a (demo-1) and flip-b (demo-2).
+  - name: flip
+    path_prefix: /flip
+    upstream: flip-a
+
+  # Failover test, three configurations of the same three instances.
+  - name: fo-passive
+    path_prefix: /fo-passive
+    upstream: fo-passive
+  - name: fo-active
+    path_prefix: /fo-active
+    upstream: fo-active
+  - name: fo-consul
+    path_prefix: /fo-consul
+    upstream: fo-consul
+
+upstreams:
+  - name: single
+    algorithm: round_robin
+    backends: [http://demo-1:8080]
+
+  - name: static3
+    algorithm: round_robin
+    backends: [http://demo-1:8080, http://demo-2:8080, http://demo-3:8080]
+
+  - name: flip-a
+    backends: [http://demo-1:8080]
+  - name: flip-b
+    backends: [http://demo-2:8080]
+
+  # Passive health only: the gateway learns a backend is dead from failed requests.
+  - name: fo-passive
+    algorithm: round_robin
+    backends: [http://demo-1:8080, http://demo-2:8080, http://demo-3:8080]
+    passive_health:
+      consecutive_failures: 3
+      cooloff: 10s
+
+  # Active + passive on the same static backends.
+  - name: fo-active
+    algorithm: round_robin
+    backends: [http://demo-1:8080, http://demo-2:8080, http://demo-3:8080]
+    health_check:
+      path: /healthz
+      interval: 2s
+      timeout: 1s
+      healthy_threshold: 2
+      unhealthy_threshold: 2
+    passive_health:
+      consecutive_failures: 3
+      cooloff: 10s
+
+  # Consul discovery (passing instances of "demo") + active + passive.
+  - name: fo-consul
+    algorithm: round_robin
+    consul:
+      service: demo
+    health_check:
+      path: /healthz
+      interval: 2s
+      timeout: 1s
+      healthy_threshold: 2
+      unhealthy_threshold: 2
+    passive_health:
+      consecutive_failures: 3
+      cooloff: 10s

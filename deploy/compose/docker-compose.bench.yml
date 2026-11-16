@@ -1,0 +1,33 @@
+# Benchmark / chaos override. Always used together with the demo stack:
+#   docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.bench.yml up -d --build --wait
+# or `make bench-up`.
+#
+# What it changes versus the demo stack:
+#   - gateway: access log OFF by default (ACCESS_LOG=true turns it on), so the
+#     overhead numbers are not dominated by one JSON line per request.
+#   - controlplane: seeded from bench.yaml (purpose-built routes) instead of seed.yaml.
+#   - demo-1..3: restart "no", so a killed instance stays dead until the
+#     script restarts it (the demo stack's unless-stopped would race the script).
+#   - prometheus and grafana only start with `--profile monitoring`, so they
+#     do not steal CPU during a measurement.
+# Nothing extra is published: k6 runs on the compose network, and fault
+# injection (/admin/fail on a demo instance) happens from inside that network.
+services:
+  gateway:
+    command:
+      - -control-plane=http://controlplane:9000
+      - -consul-addr=consul:8500
+      - -lkg-path=/var/lib/tollgate/lkg.json
+      - -shutdown-delay=2s
+      - -node-id=gateway-bench
+      - -access-log=${ACCESS_LOG:-false}
+
+  controlplane:
+    volumes: ["./bench.yaml:/etc/tollgate/seed.yaml:ro"]
+
+  demo-1: { restart: "no" }
+  demo-2: { restart: "no" }
+  demo-3: { restart: "no" }
+
+  prometheus: { profiles: ["monitoring"] }
+  grafana: { profiles: ["monitoring"] }
