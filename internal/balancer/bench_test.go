@@ -44,3 +44,37 @@ func BenchmarkNextDone(b *testing.B) {
 		}
 	}
 }
+
+// Next+Done must not allocate: it runs once per proxied request. The
+// benchmark above only reports allocs/op; this fails when they appear.
+func TestNextDoneDoesNotAllocate(t *testing.T) {
+	algos := []struct {
+		name string
+		mk   func([]*Backend, func() time.Time) Balancer
+	}{
+		{"round_robin", NewRoundRobin},
+		{"least_conn", NewLeastConn},
+	}
+	for _, a := range algos {
+		for _, n := range []int{1, 3} {
+			t.Run(fmt.Sprintf("%s/backends=%d", a.name, n), func(t *testing.T) {
+				bs := make([]*Backend, n)
+				for i := range bs {
+					raw := fmt.Sprintf("http://10.0.0.%d:80", i+1)
+					bs[i] = NewBackend("svc|"+raw, mustURL(t, raw))
+				}
+				lb := a.mk(bs, time.Now)
+				allocs := testing.AllocsPerRun(1000, func() {
+					be, err := lb.Next()
+					if err != nil {
+						t.Fatal(err)
+					}
+					lb.Done(be)
+				})
+				if allocs != 0 {
+					t.Errorf("Next+Done allocated %v times per call, want 0", allocs)
+				}
+			})
+		}
+	}
+}

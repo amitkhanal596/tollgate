@@ -201,7 +201,8 @@ func runGateway(ctx context.Context, args []string, logOut io.Writer, getenv fun
 		"after a shutdown signal, how long to keep serving while /readyz reports 503, so load balancers stop sending traffic first")
 	poll := fs.Duration("config-poll", 2*time.Second, "how often to check the config file for changes")
 	pprofOn := fs.Bool("pprof", false,
-		"DEBUG ONLY: serve net/http/pprof under /debug/pprof/ on the admin listener and sample mutex and block profiles; keep off in production")
+		"DEBUG ONLY: serve net/http/pprof under /debug/pprof/ on the admin listener and sample mutex and block profiles. "+
+			"No auth: anyone who can reach the admin listener can run CPU profiles and traces, so never expose the admin port with this on")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -383,14 +384,18 @@ func runGateway(ctx context.Context, args []string, logOut io.Writer, getenv fun
 	var shuttingDown atomic.Bool
 
 	if *pprofOn {
-		// Mutex and block profiles are empty unless sampling is on. These are
-		// process-wide runtime settings, so they are reset on exit; the
-		// sampling cost is why -pprof is a debugging switch only.
-		runtime.SetMutexProfileFraction(pprofMutexFraction)
+		// Debugging only: the endpoints have no auth, so anyone who can reach
+		// the admin listener can run CPU profiles and traces; the admin port
+		// must not be exposed. Mutex and block profiles are empty unless
+		// sampling is on, and these are process-wide runtime settings, so
+		// they are put back on exit. The mutex fraction is restored to its
+		// previous value (the setter returns it); the block rate has no
+		// getter, so it can only be reset to 0 (off, the runtime default).
+		prevMutexFraction := runtime.SetMutexProfileFraction(pprofMutexFraction)
 		runtime.SetBlockProfileRate(pprofBlockRateNs)
-		defer runtime.SetMutexProfileFraction(0)
+		defer runtime.SetMutexProfileFraction(prevMutexFraction)
 		defer runtime.SetBlockProfileRate(0)
-		logger.Warn("pprof enabled on the admin listener (/debug/pprof/); debugging only")
+		logger.Warn("pprof enabled on the admin listener (/debug/pprof/) without auth; debugging only, do not expose the admin port")
 	}
 
 	// Every goroutine started below reports at most one error, and there
@@ -513,8 +518,10 @@ func runGateway(ctx context.Context, args []string, logOut io.Writer, getenv fun
 	return 0
 }
 
-// Sampling rates used only with -pprof: about 1 in 100 mutex contention
-// events, and blocking events of 10 us or more.
+// Sampling rates used only with -pprof: on average 1 in 100 mutex contention
+// events, and one blocking event per 10 us spent blocked. Every event of 10 us
+// or more is recorded; shorter ones are still sampled, with probability
+// proportional to their duration.
 const (
 	pprofMutexFraction = 100
 	pprofBlockRateNs   = 10_000

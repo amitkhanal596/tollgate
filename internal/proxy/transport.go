@@ -7,34 +7,33 @@ import (
 	"time"
 )
 
-// Upstream connection-pool sizing, per pooled transport.
+// Upstream connection-pool sizing. A pool exists per (transportKey, backend
+// host:port), so every bound below is per backend PER transport key.
 //
-// The rule: the pool can keep every connection it is allowed to open, so a
-// healthy keep-alive connection is only ever closed by IdleConnTimeout, never
-// because the idle pool was full. When the idle cap was below the in-flight
-// concurrency (64 per host before Phase 8), every burst above it opened extra
-// connections and closed them again on return: one dial plus one TIME_WAIT
-// socket per surplus request, every burst. In the benchmark a VM pause made
-// k6 pile up to 2000 concurrent requests, and the gateway answered with up to
-// ~1700 upstream dials a second and ~13k TIME_WAIT sockets, which slowed its
-// recovery on an already saturated machine.
+// The idle pool is what removes connection churn: a burst of up to 1024
+// concurrent requests to one backend keeps every connection it opened, so a
+// healthy keep-alive connection is closed only by IdleConnTimeout. Above
+// 1024 the surplus is dialled and closed on return. With the old 64-per-host
+// idle pool, the worst benchmark run (k6 piling up after a VM pause) made the
+// gateway dial up to 2,505 times a second and hold 17.6k TIME_WAIT sockets.
 //
-// So MaxConnsPerHost equals MaxIdleConnsPerHost. The tradeoff: beyond 1024
-// concurrent requests to ONE backend, further requests wait inside the
-// transport for a free connection (bounded by the request's context
-// deadline) instead of dialling more. That is backpressure at a level no
-// single HTTP/1.1 backend serves well anyway, and it stops a client burst
-// from turning into a dial storm against the backend's accept queue.
+// There is deliberately NO connection cap (MaxConnsPerHost 0). With a cap,
+// SSE streams hold slots and further requests wait inside the transport with
+// no bound but the route's request deadline (the dial and response-header
+// timeouts do not cover that wait). The client then gets a 504 that passive
+// health counts against a healthy backend, ejecting it, and every route that
+// shares the transport key is starved. If a concurrency ceiling is ever
+// wanted it belongs in admission (a per-backend max in-flight that answers
+// 503 without blaming the backend), not in the transport.
 //
-// The cost of a full pool is about 1024 x (two goroutines + ~8 KiB of
-// buffers) per backend, only after a burst that needed it, and released
-// after IdleConnTimeout (90 s) without use. MaxIdleConns is 0 (no global
-// cap): the per-host caps already bound the total, and a global cap smaller
-// than their sum would evict, and so churn, connections whenever several
-// backends are busy at once.
+// MaxIdleConns is 0: no global cap, since one smaller than the per-host caps'
+// sum would evict, and so churn, connections when several backends are busy.
+// So idle connections are bounded only at 1024 per backend per transport key.
+// Each costs an fd, two goroutines and their read/write buffers until it has
+// been idle for IdleConnTimeout (90 s). Known limit: with very many discovered
+// backends (times transport keys) a full pool can press on the fd limit.
 const (
-	upstreamMaxConnsPerHost     = 1024
-	upstreamMaxIdleConnsPerHost = upstreamMaxConnsPerHost
+	upstreamMaxIdleConnsPerHost = 1024
 	upstreamMaxIdleConns        = 0
 	upstreamIdleConnTimeout     = 90 * time.Second
 	upstreamTCPKeepAlive        = 30 * time.Second
@@ -117,15 +116,16 @@ func newUpstreamTransport(k transportKey) *http.Transport {
 		TLSHandshakeTimeout:   k.dial,
 		ResponseHeaderTimeout: k.responseHeader,
 		ExpectContinueTimeout: upstreamExpectContinue,
-		MaxIdleConns:          upstreamMaxIdleConns,
-		MaxIdleConnsPerHost:   upstreamMaxIdleConnsPerHost,
-		MaxConnsPerHost:       upstreamMaxConnsPerHost,
-		IdleConnTimeout:       upstreamIdleConnTimeout,
+		// MaxConnsPerHost is left 0 (unlimited) on purpose: see the
+		// comment on the pool constants.
+		MaxIdleConns:        upstreamMaxIdleConns,
+		MaxIdleConnsPerHost: upstreamMaxIdleConnsPerHost,
+		IdleConnTimeout:     upstreamIdleConnTimeout,
 		// A proxy must be transparent: without this the transport would
 		// add "Accept-Encoding: gzip" and silently decompress responses.
 		DisableCompression: true,
 		// HTTP/1.1 to upstreams (like nginx); ForceAttemptHTTP2 is left
-		// off so the per-host pool limits above mean what they say.
+		// off so the per-host idle limit above means what it says.
 	}
 }
 

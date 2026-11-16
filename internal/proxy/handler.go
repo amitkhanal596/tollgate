@@ -364,6 +364,10 @@ type routeHooks struct {
 	series   *backendSeries // counts ejections; never nil
 }
 
+// knownLengthFlushInterval is the longest a known-length response's headers
+// or body bytes wait in the gateway's write buffer before being flushed.
+const knownLengthFlushInterval = 100 * time.Millisecond
+
 // newRouteProxy builds the ReverseProxy for one route. It holds no
 // per-request state, so concurrent requests share it safely.
 func (bd *builder) newRouteProxy(route, upstream string, transport http.RoundTripper, passive *config.PassiveHealth) *httputil.ReverseProxy {
@@ -372,16 +376,16 @@ func (bd *builder) newRouteProxy(route, upstream string, transport http.RoundTri
 		Rewrite: rewrite,
 		// The wrapper is where passive health learns each attempt's outcome.
 		Transport: &observingTransport{next: transport, hooks: h},
-		// 0: no forced flushing. ReverseProxy already flushes immediately
-		// whenever it matters: text/event-stream, and every response
-		// without a Content-Length (chunked streams, long polls). For a
-		// known-length response, -1 (the old value) cost a header flush
-		// from a timer goroutine plus a flush per body write: 2-3 write
-		// syscalls per small response instead of one, 23% of gateway CPU
-		// at 12k rps in the Phase 8 profile. The tradeoff: a known-length
-		// body under 4 KiB that the backend trickles out slowly reaches the
-		// client when it is complete, not piece by piece.
-		FlushInterval:  0,
+		// Only applies to known-length responses: ReverseProxy flushes
+		// immediately by itself for text/event-stream and for unknown
+		// length (ContentLength -1). Here -1 cost 2 write syscalls per
+		// small response (39-40 writes for 20 responses; flush was 23% of
+		// gateway CPU at 12k rps). 0 held the headers and up to ~4 KiB of
+		// a slow known-length body until it completed (1.0 s for a long
+		// poll). A positive interval bounds that delay, and a small
+		// response is still one write: the copy finishes and stops the
+		// flush timer before it fires.
+		FlushInterval:  knownLengthFlushInterval,
 		BufferPool:     bd.buffers,
 		ModifyResponse: h.modifyResponse,
 		ErrorHandler:   h.handleError,

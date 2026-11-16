@@ -1,7 +1,9 @@
 package main
 
 import (
+	"runtime"
 	"testing"
+	"time"
 )
 
 // -pprof is a debugging switch: off by default (the profiling endpoints
@@ -31,5 +33,26 @@ func TestPprofFlag(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// -pprof turns on mutex sampling for the life of the process; on exit it must
+// put back what was there before, not reset to 0 (an embedding process or a
+// test that had its own rate would silently lose it). Not parallel: the
+// profile rate is process-global.
+func TestPprofRestoresMutexProfileFraction(t *testing.T) {
+	prev := runtime.SetMutexProfileFraction(7) // returns the previous rate
+	t.Cleanup(func() { runtime.SetMutexProfileFraction(prev) })
+
+	up := okUpstream(t, 0)
+	r := startRun(t, writeCfg(t, up.URL), "-pprof")
+	r.waitReady(t)
+	if got := runtime.SetMutexProfileFraction(-1); got == 7 {
+		t.Fatalf("mutex profile fraction is still 7 while -pprof runs; the flag did not enable sampling")
+	}
+	r.cancel()
+	r.wait(t, 10*time.Second)
+	if got := runtime.SetMutexProfileFraction(-1); got != 7 {
+		t.Errorf("mutex profile fraction after -pprof run = %d, want 7 (the value before the run)", got)
 	}
 }
