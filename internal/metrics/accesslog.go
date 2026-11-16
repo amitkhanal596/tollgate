@@ -13,7 +13,7 @@ import (
 const (
 	MaxLogPathBytes      = 2048
 	MaxLogHostBytes      = 255
-	MaxLogClientIDBytes  = 128
+	MaxLogClientIDBytes  = 256 // = config.MaxClientIDLen, so a valid client ID is never cut (metrics imports no internal package)
 	MaxLogRequestIDBytes = 128
 	MaxLogMethodBytes    = 32
 )
