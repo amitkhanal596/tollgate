@@ -100,7 +100,7 @@ The demo credentials are in `deploy/compose/demo.env` and `deploy/compose/seed.y
 
 ## Measured results
 
-Everything below was measured on one laptop. The load generator ran on the same VM as the gateway, so these numbers do not describe a production setup. The run used the Docker VM with 8 vCPUs. k6 was pinned to CPUs 0-2, the gateway to CPUs 3-5, and everything else to CPUs 6-7. The run was on battery power, and the host had 87% of its swap in use (4431 of 5120 MB). RESULTS.md warns about both. The commit was `b80a38349c90aa68561f226833cf531513a93241`, with no tracked-file changes. See [bench/results/RESULTS.md](bench/results/RESULTS.md) for the full tables, the host and VM details, and the run provenance.
+Everything below was measured on one laptop. The load generator ran on the same VM as the gateway, so these numbers do not describe a production setup. The run used the Docker VM with 8 vCPUs. k6 was pinned to CPUs 0-2, the gateway to CPUs 3-5, and everything else to CPUs 6-7. The run was on battery power, and the host had 87% of its swap in use (4431 of 5120 MB). RESULTS.md warns about both. The commit was `b80a38349c90aa68561f226833cf531513a93241`, with no tracked-file changes. The only gateway changes since that commit are one log-field limit and a comment; nothing on the request path changed. See [bench/results/RESULTS.md](bench/results/RESULTS.md) for the full tables, the host and VM details, and the run provenance.
 
 | Measurement | Result | Caveat |
 |---|---|---|
