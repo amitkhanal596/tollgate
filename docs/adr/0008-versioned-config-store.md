@@ -1,6 +1,6 @@
 # ADR 0008: Store configs as full-document snapshots in one append-only Postgres table
 
-Status: Accepted (Phase 4 design). Builds on ADR 0001 (split) and ADR 0005 (SSE push, rollback as a new version).
+Status: Accepted (Phase 4 design; document limits, seed race and multi-replica behaviour added in the Phase 4 review fix round). Builds on ADR 0001 (split) and ADR 0005 (SSE push, rollback as a new version).
 
 ## Context
 
@@ -78,6 +78,12 @@ Lock keys (bigint, distinct, documented so nothing else in the database reuses t
 - **Empty database:** `Head` returns an empty `config.Config` with `Version: 0`. Version 0 is never stored and never streamed (`head (0) > since (>= 0)` is false), so gateways connected to an empty control plane receive only heartbeats and stay not-ready until the first write creates version 1.
 - **Every successful write creates a version,** even if the resulting document equals head (for example, a PUT of an unchanged route). This keeps "2xx write = new ETag" true without exceptions. Detecting no-op writes is listed as future work.
 - **Reads** (`Head`, `Get`, `List`) take no lock. Each is a single statement, so it sees a consistent committed snapshot and never blocks or is blocked by writers.
+- **Document limits** that `Validate` cannot see, checked by both stores after `Validate` and before writing (so a rejection consumes no version), each a 400 wrapping `config.ErrInvalid`:
+  - **Size:** the document as stored (`json.Marshal`) must be at most `MaxConfigBytes` = **4 MiB**. That is half the gateway's 8 MiB SSE event limit, so every stored version can be streamed with room for framing. `MaxBodyBytes` (1 MiB per request) does not bound it: many small PUTs can grow one document without limit.
+  - **NUL:** a `\u0000` in any string is rejected. Postgres JSONB (and TEXT) cannot store U+0000, so it was a 500 on Postgres and a 200 on `MemStore`; rejecting it in both keeps them alike.
+  - Audit labels (`X-Tollgate-Author`, `X-Tollgate-Comment`) are checked by the HTTP layer: length, valid UTF-8 and no control bytes, for the same reason (Postgres TEXT rejects invalid UTF-8 after the write lock is taken).
+- **Seeding** (`cmd/controlplane -seed`) is `Update` with `IfMatch: 0`. When two replicas start together, the loser gets `ErrVersionConflict`, which means "already seeded" and is **not fatal** (the review reproduced a crash 5/5 before this).
+- **Several replicas** may share one database: writes serialize on the advisory lock, and each replica's head poller publishes versions committed through the others (ADR 0005).
 - **Decoding stored bodies is lenient** (`json.Unmarshal`, unknown fields ignored) and does not re-validate. The database is trusted, and lenient reads let a newer schema remove a field without bricking reads of old rows. Strict decoding applies to untrusted input only (admin API bodies, the stream on the data plane).
 - **Retention:** unbounded in v1. Pruning (for example "keep the newest 1 000 versions plus anything referenced by `rolled_back_from`") is future work; the foreign key is declared `ON DELETE SET NULL` so it will not block that.
 
@@ -128,7 +134,7 @@ No migration library (not an allowed dependency). Instead:
   4. COMMIT. Postgres DDL is transactional, so a failure leaves the schema untouched.
 - Idempotent: a second run finds every file recorded and changes nothing.
 - Each file is executed with one argument-less `Exec`, which pgx sends over the simple query protocol, so a file may contain several statements. (The Postgres integration test pins this.)
-- A failure is fatal: the control plane exits non-zero rather than serving against an unknown schema.
+- A failure is fatal: the control plane exits non-zero rather than serving against an unknown schema. So is a database that is unreachable for the whole 10 s startup window (exit 1); the restart policy retries (Compose `restart: unless-stopped` after `depends_on: service_healthy`; in Kubernetes a `wait-for-postgres` init container avoids the crash loop).
 - `Store.Ping` (used by `/readyz`) checks that the database answers and that `max(schema_migrations.version)` equals the newest embedded migration.
 
 ## Consequences

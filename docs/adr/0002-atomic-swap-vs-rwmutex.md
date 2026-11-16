@@ -1,6 +1,6 @@
 # ADR 0002: Hot reload with an atomically swapped immutable snapshot
 
-Status: Accepted (Phase 0)
+Status: Accepted (Phase 0; Registry row amended by ADR 0010: backends that leave the live set keep their state for a grace period)
 
 ## Context
 
@@ -27,17 +27,17 @@ Some state is not config. It is runtime state that has to keep its value across 
 Option 2. The gateway keeps `atomic.Pointer[proxy.Snapshot]`.
 
 - **Request path:** `s := snap.Load()` once at the start of the request. Everything for that request comes from `s`. The request never reloads mid-flight.
-- **Swap path:** one goroutine, the reconcile loop, does all builds and swaps. Because there is only one writer, a plain `Store` is enough, with no compare-and-swap. It builds from (latest config, latest Consul endpoints) and then calls `Store`. If the build fails, the old snapshot stays.
+- **Swap path:** one goroutine, the reconcile loop, does all builds and swaps. Because there is only one writer, a plain `Store` is enough, with no compare-and-swap. It builds from (latest config, latest Consul endpoints) and then calls `Store`. If the build fails, the old snapshot stays. After the `Store`, in this order: `Registry.Prune` (live IDs plus those in their grace period), drop unreferenced transports, switch the metrics' live backend set (deleting departed backends' series), `Checker.Sync`. The series switch must precede `Sync`, because stopping a departed backend's probe fires a reset-to-up callback that would otherwise recreate the series just deleted.
 - **Old snapshots** are never closed or freed by hand. In-flight requests hold a pointer, and the garbage collector reclaims the snapshot after the last one finishes. This works only because of the next rule.
 - **A Snapshot owns no goroutines and no resources that need closing.** It is plain data plus pointers to long-lived objects. Everything stateful lives outside it and is carried across swaps:
 
 | Runtime state | Where it lives | How it survives a swap |
 |---|---|---|
-| Health, ejection, in-flight | `*balancer.Backend` atomics | A long-lived `balancer.Registry` returns the **same pointer** for the same backend ID (`upstream|url`). Removed IDs are pruned from the Registry after the swap, and their `tollgate_backend_*` metric series are deleted. Old requests still finish on their pointer. If the ID comes back later, the Registry hands out a **new** pointer with fresh state. |
+| Health, ejection, in-flight | `*balancer.Backend` atomics | A long-lived `balancer.Registry` returns the **same pointer** for the same backend ID (`upstream|url`). A backend that leaves the live set is out of rotation at the swap (its `tollgate_backend_*` series are deleted and its probe stopped), but it stays in the Registry for a **grace period** (60 s, ADR 0010), so an ID that comes back within it gets the same pointer with its ejection and in-flight state. After the grace it is pruned (at the start of the next rebuild), and a later return gets a **new** pointer with fresh state. Old requests always finish on the pointer they hold. |
 | Balancer cursor | Inside the per-snapshot `Balancer` | Not carried over. Round-robin restarts at a random offset, which is harmless. |
 | Rate-limit buckets | Three `ratelimit.TokenBucket`s owned by `proxy.Gateway` (authenticated identities, IP-keyed clients, failed-auth throttle; ADR 0004), swept by `Gateway.Run` | Not in the snapshot at all. The route's `Limit` is passed on every `Allow` call, so a new rate applies at the next request with no migration. |
 | Connection pools | A transport pool keyed by (dial timeout, response-header timeout), owned by `proxy.Gateway`, not by the snapshot | Reused across swaps, so a reload does not throw away warm connections. After each swap, pool entries that the new snapshot no longer references get `CloseIdleConnections()` and are dropped from the pool. Requests still running on an old snapshot keep their transport and finish normally. Idle connections to removed backends inside a still-used transport expire through `IdleConnTimeout` (90 s). |
-| Probe goroutines | `health.Checker` | After each swap, the reconcile loop calls `Sync(targets)`. The Checker diffs targets by **`*Backend` pointer identity and check settings**, not by ID: a new pointer for a known ID (a backend that was pruned and re-added) or changed settings restarts the probe. A probe stopped because its target lost its health check, or disappeared, resets that backend's active health to up. |
+| Probe goroutines | `health.Checker` | After each swap, the reconcile loop calls `Sync(targets)`. The Checker diffs targets by **`*Backend` pointer identity and check settings**, not by ID: a new pointer for a known ID (a backend that was pruned after its grace period and re-added) or changed settings restarts the probe. A probe stopped because its target lost its health check, or disappeared, resets that backend's active health to up. |
 
 **Backend is a concrete struct with atomic fields, not an interface.** The alternative was a `Backend` interface (`Healthy()`, `InFlight()`, ...). That is easy to fake in tests, but every call goes through dynamic dispatch, and nothing would make two snapshots share the *same* state object. The struct pointer is the identity that the Registry hands out, and the Registry is what makes state survive. Tests can construct real `*Backend` values directly, so no fake is needed.
 
