@@ -145,3 +145,121 @@
 - 2000 concurrent Allows with burst 50 admitted exactly 50.
 - Known, documented limit: the Peek-then-charge overshoot in the failed-auth throttle repeats per refill under concurrency. Measured 10, 2, 2, 3, 3 verifications across waves of 500.
 
+## Phase 4 — Control plane and hot reload (2026-11-15)
+
+### What was built
+- `internal/controlplane` has a `Store` interface with two implementations, `MemStore` and `PostgresStore`. Both run the same conformance suite.
+- An append-only `config_versions` table. Each row holds the full JSONB document for one version.
+- Embedded SQL migrations, applied idempotently under an advisory lock.
+- An admin REST API for config, routes, upstreams, versions and rollback, protected by an admin token.
+- An SSE config stream and a status-report endpoint, protected by a separate data-plane token.
+- A `Hub` with a capacity-1 slot per subscriber (highest version wins) and a node registry.
+- `cmd/controlplane` with flags `-listen`, `-database-url`, `-memory-store`, `-seed`, `-drain-timeout`, `-heartbeat`, `-read-timeout` and `-head-poll`.
+- Gateway side: `config.RemoteSource`, a hand-written bounded SSE parser with equal-jitter backoff, and a last-known-good file written atomically. The `Acknowledger` interface reports applied versions.
+- `cmd/gateway` gained flags `-control-plane`, `-node-id` and `-lkg-path`.
+- End-to-end tests run a real in-process control plane against the real gateway. They cover hot reload under load (zero non-200 responses across 20 route flips), rollback, rejected-config reporting, serving with the control plane down, and restart from the last-known-good file.
+
+### Decisions
+- Writers are serialised with `pg_advisory_xact_lock`, and a new version is head + 1. `SELECT ... FOR UPDATE` on the head row was rejected because it loses an update under READ COMMITTED.
+- Writes use ETag / If-Match optimistic concurrency.
+- Rollback creates a new version instead of rewinding the head.
+- The SSE stream sends full snapshots, not an event log.
+- A subscriber subscribes to the hub before it reads the head, so a publish in the gap cannot be missed.
+- Ack after apply: the gateway reports a version as applied, and writes its last-known-good file, only after the snapshot is built and swapped.
+- A rejected version is not re-delivered within the same process.
+- The admin token and the data-plane token are two separate tokens and are not interchangeable.
+- A head poller runs every 2 s. It reads the newest version's metadata and fetches the document only if that version is newer than the hub's maximum. This lets more than one control-plane replica converge, and it repairs a commit that was never published.
+
+### Bugs and surprises
+1. Shutdown flake, found by the builder. `http.Server.Shutdown` waits for connections in StateNew, meaning accepted with no request byte read yet. The Go HTTP client can dial a spare connection speculatively. One such idle connection held the control plane's drain until it timed out, and the process exited 1. Fix: track StateNew connections through `ConnState` and close them in a `RegisterOnShutdown` hook.
+2. A suspected bug that was not a bug. The architect, reading the code, predicted that the server's 30 s `ReadTimeout` would cut every SSE stream after 30 s. The reviewer built the binary with a 2 s ReadTimeout on Go 1.26.9 and 1.27.4, and the streams stayed open. net/http clears the read deadline before it starts its background read. The timeout was kept, because it is the only time bound on a slowly trickled request body. The doc was corrected, and a regression test now holds a stream open past the timeout. Lesson: confirm with an experiment before "fixing".
+3. (HIGH, review) The request metric used the raw HTTP method as a label. Unknown methods get 404 or 405 before any token check. 500 requests with distinct ~2 KB method tokens created 9,000 series and an 18 MB /metrics page, which is an unauthenticated memory and scrape denial of service. Fix: methods outside a fixed set are recorded as "other".
+4. (review) Nothing capped the total config size. Ten ~1 MiB upstream PUTs produced a 9.4 MiB version. The gateway's SSE client has an 8 MiB event limit, so it rejected the version in a reconnect loop, and every gateway silently stayed on the old version. Fix: writes above 4 MiB are rejected, which is half the gateway's limit.
+5. (review) The node registry grew without bound for any holder of the shared data-plane token. 20,000 status posts gave about 25 MiB. Fix: the registry is capped at 4,096 nodes with O(1) eviction of the least-recently-seen disconnected node. Connected nodes are never evicted, and a new stream gets 503 when the registry is full of connected nodes.
+6. (review) Two replicas started with `-seed` raced, and the loser crashed with a version conflict. Reproduced 5/5 against Postgres. Fix: a conflict on the seed write now means "already seeded".
+7. Smaller findings. A JSON body of `null` was accepted by PUT /v1/config and emptied the fleet's config. A NUL character in any string gave 200 on the in-memory store and 500 on Postgres, because JSONB cannot store it. An Applied call that arrived after shutdown lost the last-known-good write. A test that claimed to cover the final write still passed with that write deleted; it was rewritten and now fails 5/5 without it.
+8. JWT settings were validated only by algorithm name, so the control plane accepted configs that every gateway would reject. Validation now requires the right key setting for each algorithm.
+
+### Review
+- Control plane: 1 high, 3 medium and 6 low findings, all fixed test-first. No flaky tests were seen.
+- Reviewed and found sound: store concurrency, token comparison (SHA-256 digests, so no length leak), hub ordering, and the SSE parser.
+- Gateway wiring: passed with low-severity notes only.
+- Coverage, measured by the orchestrator: internal/config 95.3%, internal/controlplane 89.6% with the Postgres suite (77% when that suite skips), cmd/controlplane about 75%.
+
+## Phase 5 — Service discovery (2026-11-15 to 2026-11-16)
+
+### What was built
+- `internal/discovery` Consul watcher. One goroutine per watched service long-polls `/v1/health/service` with `passing=true`. It follows Consul's index rules and de-duplicates by address. It sends a sorted set only when the set changed, and errors never produce an empty set.
+- An integration test against a real Consul 1.20 container.
+- Gateway wiring: one generation-tagged watch per (service, tag), owned by the reconcile loop. Forwarders select on ctx for every send. An endpoint update rebuilds the snapshot without creating a new config version.
+- `cmd/gateway` gained the flag `-consul-addr`.
+
+### Decisions
+- The reconcile goroutine is the single writer of snapshots and watch state.
+- Watches are reconciled only after a config has been applied. A rejected config therefore cannot cancel a watch that the old snapshot still needs.
+- Updates from a stale generation are dropped.
+- Discovered backends come from the same Registry as configured ones, so health checks, ejection and in-flight state follow them.
+
+### Bugs and surprises
+All of these came from the independent review and were reproduced.
+1. (HIGH) Ready but serving 503. The ADR said /readyz waits for the first Consul answer, but the implementation only checked that a snapshot existed. A restarted pod with a last-known-good config therefore reported ready while its discovered upstreams had no backends. This lasted indefinitely if Consul was down. Fix: the first config is not ready until every referenced service has answered or 10 s have passed.
+2. Changing only the Consul tag of an upstream created a new watch with no data. A routine config push therefore emptied the upstream (503) until Consul answered. Fix: the previous backend set is carried over by upstream name until the new watch's first answer arrives.
+3. Discovered addresses were barely validated. Port 0 and `evil.example/../x?y:80` became backends, and two thirds of traffic failed. Fix: strict host:port validation. The docs now state that Consul-supplied addresses are trusted egress targets.
+4. A Consul flap erased passive ejection. An ejected backend that Consul dropped and then re-added came back as a new object and took traffic at once, despite a one-hour cool-off. Fix: backends that leave the live set stay in the Registry for a 60 s grace period.
+5. A Consul agent that accepted TCP and never answered stalled a watch forever. Each blocking query now has its own deadline.
+
+### Review
+- Verdict: "changes requested" (1 high, 3 medium, 3 low). All findings were fixed test-first.
+- Coverage: internal/discovery 87.3%.
+
+## Phase 6 — Observability (2026-11-15 to 2026-11-16)
+
+### What was built
+- `internal/metrics` on an injected registry, never the default one. Metrics include `requests_total{route,upstream,code}`, the `request_duration_seconds` histogram, `ratelimited_total{route,reason}`, `auth_failures_total`, `backend_up`, `backend_inflight`, `backend_ejections_total`, `config_version`, `config_apply_failures_total`, `config_stream_connected` and `access_log_dropped_total`, plus a control-plane set.
+- Every metrics method is nil-safe.
+- `LogAccess` writes one flat JSON line per request with fixed keys.
+- Gateway wiring: one deferred recorder in `ServeHTTP` counts and logs every request exactly once, on every exit path. `/metrics` is served only on the admin listener.
+- A Grafana dashboard with 19 panels.
+
+### Decisions
+- Labels are route names, upstream names and backend IDs. Paths, queries and client IDs are never used as labels.
+- The in-flight gauge is sampled every 500 ms instead of being updated per request. This keeps two labelled-gauge lookups off the hot path.
+- Backend series are written only for backends in the live set, under the same mutex as the swap. A removed backend's series therefore cannot be recreated by the health checker's reset callback.
+- A mid-body abort is recorded with the status that was already sent.
+
+### Bugs and surprises
+1. WebSocket upgrades were recorded as status 200 with 0 bytes, because ReverseProxy hijacks the connection and never calls WriteHeader(101). The socket's whole lifetime was also counted as request latency, which pushed the route's p99 into the +Inf bucket. Fix: hijacked requests are counted as 101 and kept out of the histogram.
+2. `tollgate_backend_up` stayed 1 while a backend was passively ejected. It now means "in rotation".
+3. A blocked log writer stalled every request. With stdout piped to a process that nobody read, 190 requests succeeded and then everything hung. Fix: the access log goes through a bounded async writer (8,192 lines) that drops lines and counts them when full.
+4. A test-harness bug looked like a hang. Two new tests read the gateway's exit code from a channel and never put it back. Their own cleanup then waited 10 s and failed exactly when the gateway behaved correctly. The builder proved this with a throwaway copy and did not change the code under test.
+
+### Review
+- Verdict: "changes requested" (3 medium, 2 low). All findings were fixed.
+- Coverage: internal/metrics 96.9%, internal/proxy 93.3%.
+- Measurements, builder and reviewer benchmarks on an Apple M3: metrics cost about 240 ns per request with zero extra allocations. The JSON access log adds about 2–3 µs and 3 allocations per request. A proxied loopback request took about 52.4 µs with observability off and about 55.5 µs with metrics and the access log on.
+
+## Phase 7 — Deploy and CI (2026-11-15)
+
+### What was built
+- One multi-stage Dockerfile that produces distroless nonroot images: gateway 12 MB, control plane 15 MB, demo 8.3 MB.
+- A demo upstream that registers itself in Consul and supports fault injection.
+- A compose stack: Postgres, Consul, the control plane (with a seed), the gateway, three demo services, Prometheus, and Grafana with a provisioned dashboard.
+- Kustomize manifests for kind: 2 gateway replicas, probes, a shutdown delay, and a read-only root filesystem.
+- A GitHub Actions workflow with lint, vet, race tests (Postgres and Consul service containers), an 80% internal coverage gate, builds and images.
+- A Makefile.
+
+### Decisions
+- Distroless images have no shell. A small `ready` container (the demo binary in probe mode) therefore gates `docker compose up --wait` on both /readyz endpoints.
+- k6 runs via Docker on the compose network.
+
+### Bugs and surprises
+1. On kind, the control plane crash-looped twice while Postgres was starting, because it gives up after 10 s. Fix: a wait-for-postgres init container in the manifest.
+2. golangci-lint v2.5.0 could not load the module. It was built with Go 1.25, and go.mod says 1.26.9. v2.15.0 works.
+
+### Review
+- No independent reviewer report exists for this phase. Verification was done by the infra agent and the orchestrator.
+- Compose, verified for real: `docker compose up -d --build --wait` took 43.4 s including the Go builds, and 14.4 s warm (target: under 2 minutes). Requests spread over all three discovered demo instances. /api returned 401 without a key, 200 with a key, and 429 with Retry-After under a burst. A route change through the admin API took effect within 0.5 s, and rollback restored it. Stopping one demo container lost 0 of 20 requests. Prometheus targets were up, and the Grafana dashboard was listed.
+- kind, verified for real: kind was installed into a scratch directory and the cluster was deleted afterwards. All pods were ready in about 44 s. A rolling restart of the gateway under 150 requests returned 150 × 200.
+- Not verified: the GitHub Actions workflow has only been syntax-checked and has not run on GitHub.
+- Open: the linter reports 37 findings (34 in test files) that still need cleaning up.
+
