@@ -17,6 +17,11 @@ linters:
       # through the helper and the workaround is a redundant Close per call site.
       - linters: [bodyclose]
         path: _test\.go
+issues:
+  # 0 = no cap. The defaults (50 per linter, 3 per identical message) hid about
+  # 80 of 120 findings, so a "clean" run could still be dirty.
+  max-issues-per-linter: 0
+  max-same-issues: 0
 formatters:
   enable:
     - gofmt
