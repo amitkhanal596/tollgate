@@ -7,14 +7,35 @@ import (
 	"time"
 )
 
-// Upstream connection-pool sizing, per pooled transport. MaxIdleConnsPerHost
-// matters most: the net/http default of 2 makes a busy proxy open and close
-// a TCP connection for almost every request, which costs latency and can
-// exhaust ephemeral ports through TIME_WAIT. IdleConnTimeout (90 s) bounds how
-// long an unused warm connection (and its goroutines) is kept.
+// Upstream connection-pool sizing, per pooled transport.
+//
+// The rule: the pool can keep every connection it is allowed to open, so a
+// healthy keep-alive connection is only ever closed by IdleConnTimeout, never
+// because the idle pool was full. When the idle cap was below the in-flight
+// concurrency (64 per host before Phase 8), every burst above it opened extra
+// connections and closed them again on return: one dial plus one TIME_WAIT
+// socket per surplus request, every burst. In the benchmark a VM pause made
+// k6 pile up to 2000 concurrent requests, and the gateway answered with up to
+// ~1700 upstream dials a second and ~13k TIME_WAIT sockets, which slowed its
+// recovery on an already saturated machine.
+//
+// So MaxConnsPerHost equals MaxIdleConnsPerHost. The tradeoff: beyond 1024
+// concurrent requests to ONE backend, further requests wait inside the
+// transport for a free connection (bounded by the request's context
+// deadline) instead of dialling more. That is backpressure at a level no
+// single HTTP/1.1 backend serves well anyway, and it stops a client burst
+// from turning into a dial storm against the backend's accept queue.
+//
+// The cost of a full pool is about 1024 x (two goroutines + ~8 KiB of
+// buffers) per backend, only after a burst that needed it, and released
+// after IdleConnTimeout (90 s) without use. MaxIdleConns is 0 (no global
+// cap): the per-host caps already bound the total, and a global cap smaller
+// than their sum would evict, and so churn, connections whenever several
+// backends are busy at once.
 const (
-	upstreamMaxIdleConns        = 1024
-	upstreamMaxIdleConnsPerHost = 64
+	upstreamMaxConnsPerHost     = 1024
+	upstreamMaxIdleConnsPerHost = upstreamMaxConnsPerHost
+	upstreamMaxIdleConns        = 0
 	upstreamIdleConnTimeout     = 90 * time.Second
 	upstreamTCPKeepAlive        = 30 * time.Second
 	upstreamExpectContinue      = 1 * time.Second
@@ -98,6 +119,7 @@ func newUpstreamTransport(k transportKey) *http.Transport {
 		ExpectContinueTimeout: upstreamExpectContinue,
 		MaxIdleConns:          upstreamMaxIdleConns,
 		MaxIdleConnsPerHost:   upstreamMaxIdleConnsPerHost,
+		MaxConnsPerHost:       upstreamMaxConnsPerHost,
 		IdleConnTimeout:       upstreamIdleConnTimeout,
 		// A proxy must be transparent: without this the transport would
 		// add "Accept-Encoding: gzip" and silently decompress responses.

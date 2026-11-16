@@ -372,11 +372,16 @@ func (bd *builder) newRouteProxy(route, upstream string, transport http.RoundTri
 		Rewrite: rewrite,
 		// The wrapper is where passive health learns each attempt's outcome.
 		Transport: &observingTransport{next: transport, hooks: h},
-		// -1 flushes after every write to the client, so streamed
-		// responses (SSE, long polls, chunked progress output) are not
-		// held back in a buffer. Large copies bypass the buffer anyway, so
-		// the extra flushes cost little.
-		FlushInterval:  -1,
+		// 0: no forced flushing. ReverseProxy already flushes immediately
+		// whenever it matters: text/event-stream, and every response
+		// without a Content-Length (chunked streams, long polls). For a
+		// known-length response, -1 (the old value) cost a header flush
+		// from a timer goroutine plus a flush per body write: 2-3 write
+		// syscalls per small response instead of one, 23% of gateway CPU
+		// at 12k rps in the Phase 8 profile. The tradeoff: a known-length
+		// body under 4 KiB that the backend trickles out slowly reaches the
+		// client when it is complete, not piece by piece.
+		FlushInterval:  0,
 		BufferPool:     bd.buffers,
 		ModifyResponse: h.modifyResponse,
 		ErrorHandler:   h.handleError,
