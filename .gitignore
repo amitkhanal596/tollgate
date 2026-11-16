@@ -17,3 +17,4 @@ bench/results/raw/
 
 # python bytecode
 __pycache__/
+bench/results/smoke/

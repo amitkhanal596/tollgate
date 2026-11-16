@@ -186,20 +186,34 @@ stop_sampler() {
 # record_provenance SECTION LABEL: append what is actually running right now
 # (call it right AFTER bring_up): git HEAD, whether TRACKED files are modified
 # (untracked files such as results do not count), and the IDs of the images the
-# running gateway/controlplane/demo containers were created from.
+# running gateway/controlplane/demo containers were created from, plus each image's
+# content identity (sha256 over its RootFS layers): that, not the ID, decides equality.
 record_provenance() {
   local section="$1" label="$2" g c d
   g="$(docker inspect -f '{{.Image}}' "$(cid gateway)" 2>/dev/null || echo unknown)"
   c="$(docker inspect -f '{{.Image}}' "$(cid controlplane)" 2>/dev/null || echo unknown)"
   d="$(docker inspect -f '{{.Image}}' "$(cid demo-1)" 2>/dev/null || echo unknown)"
   py - "$OUT_DIR/provenance.jsonl" "$ROOT" "$section" "$label" "$g" "$c" "$d" <<'PY'
-import json, subprocess, sys, datetime
+import hashlib, json, subprocess, sys, datetime
 out, root, section, label, g, c, d = sys.argv[1:8]
 def git(*a):
     try:
         return subprocess.run(["git", "-C", root, *a], capture_output=True, text=True, timeout=30).stdout.strip()
     except Exception:
         return ""
+def content(image_id):
+    """Content identity: sha256 over the ordered RootFS layer list (same as summarize.layers_digest).
+    The image ID alone is not enough: with Docker's containerd image store it is a manifest digest that can
+    change for identical content."""
+    try:
+        r = subprocess.run(["docker", "image", "inspect", image_id], capture_output=True, text=True, timeout=60)
+        info = json.loads(r.stdout)[0]
+        layers = info["RootFS"]["Layers"]
+        return {"layers_sha256": hashlib.sha256("\n".join(layers).encode()).hexdigest(), "layer_count": len(layers),
+                "created": info.get("Created"), "architecture": info.get("Architecture"), "os": info.get("Os")}
+    except Exception:
+        return None
+
 rec = {
     "section": section, "label": label,
     "time_utc": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -207,6 +221,7 @@ rec = {
     # tracked files only: results and other untracked files must not make the flag useless
     "git_dirty": bool(git("status", "--porcelain", "--untracked-files=no")),
     "images": {"gateway": g, "controlplane": c, "demo": d},
+    "content": {k: content(v) for k, v in (("gateway", g), ("controlplane", c), ("demo", d))},
 }
 with open(out, "a") as fh:
     fh.write(json.dumps(rec) + "\n")

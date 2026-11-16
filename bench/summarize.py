@@ -474,8 +474,71 @@ def aggregate_maxrps(runs):
 # ----------------------------------------------------------------------------
 # merge
 # ----------------------------------------------------------------------------
-def completeness(secs):
-    """(provenance summary, blockers) for the sections dict. `complete` is true iff there are no blockers."""
+IMAGES = ("gateway", "controlplane", "demo")
+
+
+def layers_digest(layers):
+    """Content identity of an image: sha256 over its ordered RootFS layer list (one per line).
+
+    bench/lib.sh (record_provenance) computes the same value when it records a run."""
+    import hashlib
+    return hashlib.sha256("\n".join(layers).encode()).hexdigest()
+
+
+def image_identity(rec, img):
+    """What identifies an image in one provenance record: its content digest when recorded, else its ID.
+
+    The ID is a manifest/index digest with Docker's containerd image store and can change for the same
+    content, so the content digest is preferred. The prefix keeps the two kinds from being compared."""
+    c = (rec.get("content") or {}).get(img) or {}
+    if c.get("layers_sha256"):
+        return "content:" + c["layers_sha256"]
+    return "id:" + rec["images"][img]
+
+
+def verify_image_identity(records, inspect=None):
+    """Legacy fallback for runs recorded before content identities existed (IDs only).
+
+    For each image whose IDs differ between brings-up and for which some record has no content digest,
+    inspect every ID with `docker image inspect` (right now, on this machine). If all are present locally
+    and their RootFS layers are identical, return {image: evidence}; completeness() then treats the IDs
+    as one content. Missing images or differing layers return nothing for that image: the blocker stays.
+    `inspect(id)` -> dict with RootFS.Layers, Created, Architecture, Os, or None; injectable for tests."""
+    def docker_inspect(image_id):
+        import subprocess
+        try:
+            out = subprocess.run(["docker", "image", "inspect", image_id], capture_output=True, text=True, timeout=60)
+            return json.loads(out.stdout)[0] if out.returncode == 0 else None
+        except Exception:
+            return None
+
+    inspect = inspect or docker_inspect
+    verified = {}
+    for img in IMAGES:
+        ids = sorted({r["images"][img] for r in records})
+        if len(ids) < 2 or all((r.get("content") or {}).get(img) for r in records):
+            continue
+        infos = [inspect(i) for i in ids]
+        if any(i is None for i in infos):
+            continue
+        layers = [i.get("RootFS", {}).get("Layers") or [] for i in infos]
+        if not layers[0] or any(l != layers[0] for l in layers):
+            continue
+        verified[img] = {
+            "ids": ids, "layers_sha256": layers_digest(layers[0]), "layer_count": len(layers[0]),
+            "created": infos[0].get("Created"), "architecture": infos[0].get("Architecture"), "os": infos[0].get("Os"),
+            "method": "verified at merge time by inspecting local images (docker image inspect): identical RootFS layers",
+            "time_utc": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "labels": {r["images"][img]: sorted({x["label"] for x in records if x["images"][img] == r["images"][img]}) for r in records},
+        }
+    return verified
+
+
+def completeness(secs, verified=None):
+    """(provenance summary, blockers) for the sections dict. `complete` is true iff there are no blockers.
+
+    Pure: `verified` is the merge-time docker inspection result (see verify_image_identity), computed by the caller."""
+    verified = verified or {}
     blockers = []
     prov = []
     for s in ("bench", "chaos"):
@@ -497,15 +560,29 @@ def completeness(secs):
     heads = {r["git_head"] for r in prov}
     if len(heads) > 1:
         blockers.append(f"sections come from different commits: {sorted(h[:9] for h in heads)}")
-    for img in ("gateway", "controlplane", "demo"):
-        ids = {r["images"][img] for r in prov}
-        if len(ids) > 1:
-            blockers.append(f"{img} image differs between brings-up")
+    notes = []
+    image_ids, image_content = {}, {}
+    for img in IMAGES:
+        ids = sorted({r["images"][img] for r in prov})
+        image_ids[img] = ids
+        idents = {image_identity(r, img) for r in prov}
+        contents = {i for i in idents if i.startswith("content:")}
+        image_content[img] = contents.pop()[len("content:"):] if len(idents) == 1 and contents else None
+        if len(idents) <= 1:
+            continue
+        v = verified.get(img)
+        if v and set(ids) <= set(v["ids"]) and not any(i.startswith("content:") for i in idents):
+            notes.append({"image": img, **v})  # IDs differ, content verified identical at merge time
+            image_content[img] = v["layers_sha256"]
+            continue
+        blockers.append(f"{img} image differs between brings-up")
     summary = {
         "git_head": sorted(heads)[0] if len(heads) == 1 else None,
         "git_dirty": any(r["git_dirty"] for r in prov),
-        "images": {img: (sorted({r["images"][img] for r in prov})[0] if len({r["images"][img] for r in prov}) == 1 else None)
-                   for img in ("gateway", "controlplane", "demo")},
+        "images": {img: (image_ids[img][0] if len(image_ids[img]) == 1 else None) for img in IMAGES},
+        "image_ids": image_ids,
+        "image_content_sha256": image_content,
+        "image_identity_notes": notes,
         "records": prov,
     }
     return summary, blockers
@@ -565,7 +642,8 @@ def cmd_merge(raw, out, part):
     res["generated_by"] = part
     res["smoke"] = any(s["smoke"] for s in secs.values())
     res["knobs"] = meta["knobs"]
-    res["provenance"], res["complete_blockers"] = completeness(secs)
+    all_prov = [r for sec in secs.values() for r in sec.get("provenance", [])]
+    res["provenance"], res["complete_blockers"] = completeness(secs, verify_image_identity(all_prov))
     res["complete"] = not res["complete_blockers"]
     with open(out, "w") as fh:
         json.dump(res, fh, indent=2)
@@ -598,6 +676,13 @@ def rng(v, nd=3, unit=""):
     return f"{f(min(v),nd)} / {f(statistics.median(v),nd)} / {f(max(v),nd)}{unit}"
 
 
+def dropped_line(runs):
+    """k6 dropped iterations per repetition. k6 reports them for the whole run (it cannot split them by step), so a
+    step that missed its rate shows up here only through the run total; achieved vs target is the per-step signal."""
+    parts = ", ".join(f"rep {r.get('run', i + 1)}: {r.get('dropped_iterations_total', 0):.0f}" for i, r in enumerate(runs))
+    return f"k6 dropped iterations (whole run, not splittable by step): {parts}."
+
+
 def cmd_report(src, out):
     r = load(src)
     L = []
@@ -617,7 +702,21 @@ def cmd_report(src, out):
     pv = r.get("provenance", {})
     w(f"- **commit:** `{pv.get('git_head') or 'mixed or unknown'}`, tracked files modified: {'YES (dirty)' if pv.get('git_dirty') else 'no'}")
     for img, v in (pv.get("images") or {}).items():
-        w(f"- **{img} image id:** `{v or 'differs between brings-up'}`")
+        ids = (pv.get("image_ids") or {}).get(img) or []
+        content = (pv.get("image_content_sha256") or {}).get(img)
+        if v:
+            line = f"- **{img} image id:** `{v}`"
+            if content:
+                line += f" (content sha256 over RootFS layers `{content[:16]}`)"
+        else:
+            line = f"- **{img} image ids differ between brings-up:** " + ", ".join(f"`{i[:19]}`" for i in ids)
+            line += f"; same content (layers sha256 `{content[:16]}`)" if content else "; content NOT shown to be identical"
+        w(line)
+    for n in pv.get("image_identity_notes") or []:
+        w(f"- **image identity note ({n['image']}):** the image IDs differ ({', '.join('`' + i[:19] + '` at ' + '/'.join(n['labels'].get(i, [])) for i in n['ids'])}). "
+          f"This run recorded IDs only, so equality was established as a fallback: {n['method']}, at {n['time_utc']}. "
+          f"{n['layer_count']} layers, sha256 over the ordered layer list `{n['layers_sha256']}`, created {n.get('created')}, {n.get('os')}/{n.get('architecture')}. "
+          "With Docker's containerd image store the ID is a manifest digest that can change for the same content.")
     w(f"- **generated:** {r.get('timestamp_utc')} (part run: {r.get('generated_by')})")
     m = r.get("machine", {})
     h, dk = m.get("host", {}), m.get("docker", {})
@@ -724,6 +823,8 @@ def cmd_report(src, out):
                 w("**Ceiling not found:** the quoted number is a lower bound, not a measured maximum.")
                 w("")
             w(f"{ag['runs']} run(s). Max sustained step: {ag['max_step_rps']} rps (median achieved {f(ag['max_achieved_rps'],0)} rps).")
+            w("")
+            w(dropped_line(runs))
             w("")
             w("| step rps | statuses | verdict | achieved (median) | p99 ms median / worst | CPU cores total (gateway) | dials/s | TIME_WAIT peak | max stall ms | notes |")
             w("|---|---|---|---|---|---|---|---|---|---|")
