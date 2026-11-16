@@ -130,7 +130,10 @@ func TestObservePassiveSuccessAfterCooloffRestartsStreak(t *testing.T) {
 	if ObservePassive(b, p, 200, nil, later) {
 		t.Fatal("success reported ejected")
 	}
-	if ObservePassive(b, p, 500, nil, later) || ObservePassive(b, p, 500, nil, later) {
+	if ObservePassive(b, p, 500, nil, later) {
+		t.Fatal("ejected before N failures since the success")
+	}
+	if ObservePassive(b, p, 500, nil, later) {
 		t.Fatal("ejected before N failures since the success")
 	}
 	if !ObservePassive(b, p, 500, nil, later) {

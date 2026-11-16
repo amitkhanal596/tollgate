@@ -51,7 +51,10 @@ func startRunWith(t *testing.T, opts Options) *harness {
 	t.Cleanup(func() {
 		cancel()
 		select {
-		case <-h.done:
+		case err := <-h.done:
+			if err != nil {
+				t.Logf("Run returned: %v", err)
+			}
 		case <-time.After(5 * time.Second):
 			t.Error("Run did not return after cleanup cancel")
 		}

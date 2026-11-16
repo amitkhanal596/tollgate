@@ -109,7 +109,7 @@ func (f *fakeConsul) Restart() {
 	f.done = make(chan struct{})
 	f.mu.Unlock()
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(f.serve))
-	srv.Listener.Close()
+	_ = srv.Listener.Close()
 	srv.Listener = l
 	srv.Start()
 	f.mu.Lock()
@@ -321,7 +321,7 @@ block:
 		case faultClose:
 			if hj, ok := w.(http.Hijacker); ok {
 				if c, _, err := hj.Hijack(); err == nil {
-					c.Close()
+					_ = c.Close()
 				}
 			}
 			return

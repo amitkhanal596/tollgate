@@ -270,7 +270,7 @@ func TestFixRound4_StreamRefusedWhenRegistryFullOfConnectedNodes(t *testing.T) {
 	if ct := resp.Header.Get("Content-Type"); strings.HasPrefix(ct, ContentTypeEventStream) {
 		t.Fatalf("503 carries Content-Type %q", ct)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	cancel()
 	if _, ok := findNode(se.listNodes(t), "c"); ok {
 		t.Fatal("refused node c is listed")
@@ -293,7 +293,7 @@ func TestFixRound4_StreamRefusedWhenRegistryFullOfConnectedNodes(t *testing.T) {
 		if !accepted && resp.StatusCode != http.StatusServiceUnavailable {
 			t.Fatalf("stream after a disconnect: status %d, want 200 or 503", resp.StatusCode)
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		cancel()
 		if !accepted {
 			time.Sleep(20 * time.Millisecond)

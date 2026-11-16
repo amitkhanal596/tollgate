@@ -440,7 +440,7 @@ func TestVersions_List(t *testing.T) {
 			for _, v := range vl.Versions {
 				got = append(got, v.Version)
 			}
-			if fmt.Sprint(got) != fmt.Sprint(tc.want) && !(len(got) == 0 && len(tc.want) == 0) {
+			if fmt.Sprint(got) != fmt.Sprint(tc.want) && (len(got) != 0 || len(tc.want) != 0) {
 				t.Fatalf("versions %v, want %v", got, tc.want)
 			}
 			if vl.NextBefore != tc.wantNextBefore {

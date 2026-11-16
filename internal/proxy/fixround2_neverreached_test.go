@@ -22,7 +22,7 @@ func rawDial(t *testing.T, srv *httptest.Server) net.Conn {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { conn.Close() })
+	t.Cleanup(func() { _ = conn.Close() })
 	return conn
 }
 
@@ -44,7 +44,7 @@ func readStatus(t *testing.T, conn net.Conn) int {
 		t.Errorf("read response: %v", err)
 		return 0
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	return resp.StatusCode
 }
 
@@ -176,7 +176,7 @@ func TestSlowBackendAfterCompleteUploadStillCountsAs504(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if resp.StatusCode != http.StatusGatewayTimeout {
 			t.Fatalf("slow-backend request %d: %d, want 504", i+1, resp.StatusCode)
 		}

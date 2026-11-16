@@ -10,6 +10,13 @@ linters:
     - errorlint
     - misspell
     - unconvert
+  exclusions:
+    rules:
+      # Test helpers (cp.do, rawGet, ReadResponse over a raw conn, ...) read and
+      # close the body themselves, or the conn owns it; bodyclose cannot see
+      # through the helper and the workaround is a redundant Close per call site.
+      - linters: [bodyclose]
+        path: _test\.go
 formatters:
   enable:
     - gofmt

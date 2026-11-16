@@ -84,7 +84,7 @@ func freeAddr(t *testing.T) string {
 		t.Fatal(err)
 	}
 	addr := ln.Addr().String()
-	ln.Close()
+	_ = ln.Close()
 	return addr
 }
 
@@ -144,7 +144,7 @@ func startCP(t *testing.T, env map[string]string, extra ...string) *cp {
 		}
 		resp, err := http.Get("http://" + c.addr + "/healthz")
 		if err == nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if resp.StatusCode == 200 {
 				return c
 			}
@@ -187,7 +187,7 @@ func (c *cp) do(t *testing.T, method, path, token, body string) (*http.Response,
 	if err != nil {
 		t.Fatalf("%s %s: %v", method, path, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	b, _ := io.ReadAll(resp.Body)
 	return resp, b
 }
@@ -308,7 +308,7 @@ func TestHappyPath(t *testing.T) {
 func TestStreamEndToEndAndShutdown(t *testing.T) {
 	c := startCP(t, goodEnv(), "-memory-store")
 	lines, body := c.openStream(t, "n1", 0)
-	defer body.Close()
+	defer func() { _ = body.Close() }()
 
 	// Wait until the server has registered the stream before writing, so the
 	// event is delivered live (not only via head-on-connect).
@@ -323,7 +323,7 @@ func TestStreamEndToEndAndShutdown(t *testing.T) {
 	var sawID, sawEvent, sawData bool
 	timeout := time.After(5 * time.Second)
 read:
-	for !(sawID && sawEvent && sawData) {
+	for !sawID || !sawEvent || !sawData {
 		select {
 		case l, ok := <-lines:
 			if !ok {
@@ -390,7 +390,7 @@ func TestMetricsOnSameListener(t *testing.T) {
 		return func() bool { return re.MatchString(c.metrics(t)) }
 	}
 	eventually(t, "dataplanes_connected 1", connected(1))
-	body.Close()
+	_ = body.Close()
 	eventually(t, "dataplanes_connected 0", connected(0))
 }
 
@@ -439,7 +439,7 @@ func TestStartupFailures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer busy.Close()
+	defer func() { _ = busy.Close() }()
 
 	without := func(key string) map[string]string {
 		e := goodEnv()
@@ -520,7 +520,7 @@ func TestLogsAreJSONAndNeverContainTokens(t *testing.T) {
 	c.do(t, "GET", "/v1/config", "wrong-"+adminTok, "") // a failed auth must not log the presented token either
 	_, body := c.openStream(t, "n1", 0)
 	time.Sleep(60 * time.Millisecond)
-	body.Close()
+	_ = body.Close()
 	if code, _ := c.stop(t); code != 0 {
 		t.Fatalf("exit = %d", code)
 	}

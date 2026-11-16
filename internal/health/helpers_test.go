@@ -179,7 +179,7 @@ func (h *harness) start(t testing.TB) {
 	h.cancel = cancel
 	h.done = make(chan error, 1)
 	go func() { h.done <- h.c.Run(ctx) }()
-	t.Cleanup(func() { h.stop(t) })
+	t.Cleanup(func() { _ = h.stop(t) })
 }
 
 // stop cancels Run and returns its error (nil if already stopped).

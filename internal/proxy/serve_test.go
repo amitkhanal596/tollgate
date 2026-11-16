@@ -72,7 +72,7 @@ func TestServeGracefulDrain(t *testing.T) {
 			res <- result{err: err}
 			return
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		b, _ := io.ReadAll(resp.Body)
 		res <- result{resp.StatusCode, string(b), nil}
 	}()
@@ -102,7 +102,7 @@ func TestServeRefusesNewConnectionsAfterCancel(t *testing.T) {
 	go func() {
 		resp, err := (&http.Client{Timeout: 5 * time.Second}).Get("http://" + s.addr + "/")
 		if err == nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 		}
 	}()
 	<-entered
@@ -114,7 +114,7 @@ func TestServeRefusesNewConnectionsAfterCancel(t *testing.T) {
 		if err != nil {
 			return true
 		}
-		c.Close()
+		_ = c.Close()
 		return false
 	})
 	select {
@@ -144,7 +144,7 @@ func TestServeDrainTimeoutReturnsError(t *testing.T) {
 	go func() {
 		resp, err := (&http.Client{Timeout: 5 * time.Second}).Get("http://" + s.addr + "/")
 		if err == nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 		}
 	}()
 	<-entered
@@ -185,7 +185,7 @@ func TestNoGoroutineLeakAfterShutdown(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 	}
 
 	s.cancel()

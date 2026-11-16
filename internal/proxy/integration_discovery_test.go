@@ -71,7 +71,7 @@ func igHold(t *testing.T, base string, b *ctrlBackend) <-chan igResult {
 				ch <- igResult{err: err}
 				return
 			}
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 			buf := make([]byte, 64)
 			n, _ := resp.Body.Read(buf)
 			ch <- igResult{code: resp.StatusCode, body: string(buf[:n])}
@@ -377,7 +377,10 @@ func TestDiscoveryShutdownWithPendingUpdateDoesNotHang(t *testing.T) {
 				go w.send(eps)
 				cancel()
 				select {
-				case <-done:
+				case err := <-done:
+					if err != nil {
+						t.Logf("Run returned: %v", err)
+					}
 				case <-time.After(2 * time.Second):
 					t.Fatalf("iteration %d: Run did not return within 2s with an update racing the cancel", i)
 				}

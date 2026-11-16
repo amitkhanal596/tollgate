@@ -35,7 +35,7 @@ func echoUpgradeServer(t *testing.T) *httptest.Server {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		_, _ = brw.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: echo\r\n\r\n")
 		_ = brw.Flush()
 		for {
@@ -72,7 +72,7 @@ func TestFixRound5_UpgradeIsLoggedAs101AndNotObservedAsLatency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 	req, _ := http.NewRequest(http.MethodGet, "http://gw/ws", nil)
 	req.Header.Set("Connection", "Upgrade")
@@ -94,7 +94,7 @@ func TestFixRound5_UpgradeIsLoggedAs101AndNotObservedAsLatency(t *testing.T) {
 	if line, err := br.ReadString('\n'); err != nil || line != "ping\n" {
 		t.Fatalf("echo through the gateway = %q, %v, want ping", line, err)
 	}
-	conn.Close() // the upgraded connection ends: only now is the request recorded
+	_ = conn.Close() // the upgraded connection ends: only now is the request recorded
 
 	waitFor(t, 3*time.Second, "the upgraded request to be recorded", func() bool {
 		return igSum(t, reg, "tollgate_requests_total") >= 2
@@ -207,7 +207,7 @@ func TestFixRound5_RemovedOrRenamedRouteSeriesDisappear(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				resp.Body.Close()
+				_ = resp.Body.Close()
 				return resp.StatusCode
 			}
 			if c := do("/old", ""); c != 401 {
@@ -310,7 +310,7 @@ func TestFixRound5_BlockedAccessLogSinkDoesNotStallRequests(t *testing.T) {
 			t.Fatalf("request %d failed with the log sink blocked: %v", i, err)
 		}
 		_, _ = io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if resp.StatusCode != 200 {
 			t.Fatalf("request %d = %d, want 200", i, resp.StatusCode)
 		}

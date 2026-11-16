@@ -505,7 +505,7 @@ func TestFixRound5_EndpointRebuildReusesAuthenticators(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer resp.Body.Close()
+				defer func() { _ = resp.Body.Close() }()
 				buf := make([]byte, 16)
 				n, _ := resp.Body.Read(buf)
 				return resp.StatusCode, string(buf[:n])

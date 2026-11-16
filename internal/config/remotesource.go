@@ -390,7 +390,7 @@ func (s *RemoteSource) stream(ctx context.Context, out chan *Config) (healthy bo
 	}
 	// Closing the body on every path releases the connection; on shutdown
 	// connCtx is already canceled, so the transport tears it down.
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if !isEventStream(resp) {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxDiscardBytes))

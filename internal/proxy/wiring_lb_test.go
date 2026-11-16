@@ -62,7 +62,7 @@ func TestWiringAlgorithmHonoured(t *testing.T) {
 					defer close(done)
 					resp, err := client.Get(srv.URL + "/hold")
 					if err == nil {
-						resp.Body.Close()
+						_ = resp.Body.Close()
 					}
 				}()
 				// Either B/C answered (done) or A is now holding it.

@@ -95,7 +95,7 @@ func TestFixRound5_AsyncWriterBlockedSinkDropsInsteadOfBlocking(t *testing.T) {
 	go func() {
 		defer close(done)
 		for i := 0; i < writes; i++ {
-			if n, err := w.Write([]byte(fmt.Sprintf("l%d\n", i))); err != nil || n == 0 {
+			if n, err := fmt.Fprintf(w, "l%d\n", i); err != nil || n == 0 {
 				t.Errorf("Write #%d = (%d, %v), want success even when dropped", i, n, err)
 				return
 			}
@@ -175,7 +175,7 @@ func TestFixRound5_AsyncWriterCloseFlushesQueuedLines(t *testing.T) {
 	sink := &fr5Sink{gate: make(chan struct{})}
 	w := NewAsyncWriter(sink, 100, nil)
 	for i := 0; i < 50; i++ {
-		_, _ = w.Write([]byte(fmt.Sprintf("q%02d\n", i)))
+		_, _ = fmt.Fprintf(w, "q%02d\n", i)
 	}
 	go func() { // the sink recovers shortly after Close starts waiting
 		time.Sleep(50 * time.Millisecond)
@@ -261,7 +261,7 @@ func TestFixRound5_AsyncWriterConcurrentWriters(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for i := 0; i < per; i++ {
-				_, _ = w.Write([]byte(fmt.Sprintf("w%d-%04d-%s\n", g, i, strings.Repeat("z", 50))))
+				_, _ = fmt.Fprintf(w, "w%d-%04d-%s\n", g, i, strings.Repeat("z", 50))
 			}
 		}()
 	}

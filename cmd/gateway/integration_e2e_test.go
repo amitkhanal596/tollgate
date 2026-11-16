@@ -64,7 +64,7 @@ func e2eFreeAddr(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	return ln.Addr().String()
 }
 
@@ -86,7 +86,7 @@ func e2eGet(url string) (int, string, error) {
 	if err != nil {
 		return 0, "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	b, _ := io.ReadAll(resp.Body)
 	return resp.StatusCode, string(b), nil
 }
@@ -166,7 +166,7 @@ func (c *e2eCP) admin(method, path, body string) (int, []byte) {
 	if err != nil {
 		c.t.Fatalf("%s %s: %v", method, path, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	b, _ := io.ReadAll(resp.Body)
 	return resp.StatusCode, b
 }
@@ -504,7 +504,7 @@ func TestE2EHotReloadUnderLoad(t *testing.T) {
 					continue
 				}
 				body, _ := io.ReadAll(resp.Body)
-				resp.Body.Close()
+				_ = resp.Body.Close()
 				if resp.StatusCode != 200 || (string(body) != "A" && string(body) != "B") {
 					bad.Add(1)
 					firstBad.CompareAndSwap(nil, fmt.Sprintf("status %d body %q", resp.StatusCode, body))
@@ -735,7 +735,7 @@ func TestE2EConsulAddrFlagEnablesDiscovery(t *testing.T) {
 		w.Header().Set("X-Consul-Index", "5")
 		w.Header().Set("X-Consul-KnownLeader", "true")
 		w.Header().Set("X-Consul-LastContact", "0")
-		fmt.Fprintf(w, `[{"Node":{"Node":"n1","Address":%q},"Service":{"ID":"users-1","Service":"users","Address":%q,"Port":%d,"Tags":[]},`+
+		_, _ = fmt.Fprintf(w, `[{"Node":{"Node":"n1","Address":%q},"Service":{"ID":"users-1","Service":"users","Address":%q,"Port":%d,"Tags":[]},`+
 			`"Checks":[{"Node":"n1","CheckID":"service:users-1","Name":"svc","Status":"passing","ServiceID":"users-1"}]}]`, host, host, portNum)
 	}))
 	defer consul.Close()

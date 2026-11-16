@@ -190,7 +190,7 @@ func scMutateError(t *testing.T, ns func(*testing.T) Store) {
 		c.Upstreams = append(c.Upstreams, testUpstream("half-applied"))
 		return sentinel
 	})
-	if err != sentinel { // "returned UNCHANGED"
+	if !errors.Is(err, sentinel) { // "returned UNCHANGED"
 		t.Fatalf("err = %v, want exactly the mutate error", err)
 	}
 	if calls != 1 {

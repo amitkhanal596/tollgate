@@ -126,7 +126,7 @@ func parseFrame(lines []string) sseFrame {
 
 func (c *sseClient) close() {
 	c.cancel()
-	c.resp.Body.Close()
+	_ = c.resp.Body.Close()
 }
 
 func (c *sseClient) next(t *testing.T, d time.Duration) sseFrame {
@@ -216,7 +216,7 @@ func TestStream_Headers(t *testing.T) {
 	se := newStreamEnv(t)
 	resp, cancel := se.dial(t, dpTok, "?node=gw-1")
 	defer cancel()
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != 200 {
 		t.Fatalf("status %d", resp.StatusCode)
 	}
@@ -637,7 +637,7 @@ func TestStream_AuthOnRealConnection(t *testing.T) {
 	se := newStreamEnv(t)
 	for name, tok := range map[string]string{"none": "", "admin": adminTok, "wrong": strings.Repeat("q", 44)} {
 		resp, cancel := se.dial(t, tok, "?node=gw")
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		cancel()
 		if resp.StatusCode != 401 {
 			t.Errorf("%s token: status %d, want 401", name, resp.StatusCode)

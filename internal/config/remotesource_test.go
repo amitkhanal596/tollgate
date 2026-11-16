@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"reflect"
 	"runtime"
@@ -65,7 +66,7 @@ func TestRemoteOptionsValidation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			o := good()
 			tc.mutate(&o)
-			s, err, p := rsTryNew(o)
+			s, p, err := rsTryNew(o)
 			if p != nil {
 				t.Fatalf("NewRemoteSource panicked: %v", p)
 			}
@@ -163,7 +164,7 @@ func TestRemoteSecondWatch(t *testing.T) {
 	h := newRS(t)
 	h.watch()
 	ch, err := h.src.Watch(context.Background())
-	if err != ErrAlreadyWatching || ch != nil {
+	if !errors.Is(err, ErrAlreadyWatching) || ch != nil {
 		t.Fatalf("second Watch = (%v, %v), want (nil, ErrAlreadyWatching)", ch, err)
 	}
 }

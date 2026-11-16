@@ -181,7 +181,7 @@ func TestFixRound5_BlockedLogSinkDoesNotStallRequests(t *testing.T) {
 		if err != nil {
 			t.Fatalf("request %d failed while the log sink was blocked (blocked=%v): %v", i, sink.blocked.Load(), err)
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if resp.StatusCode != 200 {
 			t.Fatalf("request %d = %d, want 200", i, resp.StatusCode)
 		}

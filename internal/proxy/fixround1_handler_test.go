@@ -34,7 +34,7 @@ func inFlight(t *testing.T, g *Gateway, upstream, raw string) int64 {
 // directGateway builds a Gateway with cfg applied synchronously (no Run).
 func directGateway(cfg *config.Config) *Gateway {
 	g := New(Options{})
-	g.apply(cfg)
+	_ = g.apply(cfg)
 	return g
 }
 
@@ -111,7 +111,7 @@ func TestRequestIDSurvives1xx(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != 200 {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
@@ -155,14 +155,14 @@ func TestGatewayErrorsCarryRequestID(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer c.Close()
+			defer func() { _ = c.Close() }()
 			_ = c.SetDeadline(time.Now().Add(5 * time.Second))
 			_, _ = io.WriteString(c, "GET "+tc.path+" HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
 			resp, err := http.ReadResponse(bufio.NewReader(c), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if resp.StatusCode != tc.want {
 				t.Fatalf("status = %d, want %d", resp.StatusCode, tc.want)
 			}

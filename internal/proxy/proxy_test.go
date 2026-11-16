@@ -67,7 +67,7 @@ func TestProxyForwardsRequestAndResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(resp.Body)
 
 	got := recv(t, seen)
@@ -102,7 +102,7 @@ func TestProxyUpstreamStatusRelayed(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if resp.StatusCode != code {
 				t.Fatalf("status = %d, want %d (upstream status must pass through)", resp.StatusCode, code)
 			}
@@ -134,7 +134,7 @@ func TestProxyForwardedHeadersAndHost(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			got := recv(t, seen)
 			if v := got.header.Get("X-Forwarded-For"); v != tc.wantXFF {
 				t.Errorf("X-Forwarded-For = %q, want %q", v, tc.wantXFF)
@@ -168,7 +168,7 @@ func TestProxyStripsHopByHopHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	got := recv(t, seen)
 	for _, h := range []string{"X-Custom-Hop", "Keep-Alive", "Proxy-Authorization", "Te", "Upgrade"} {
@@ -200,7 +200,7 @@ func TestProxyRequestID(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			up := recv(t, seen).header.Get("X-Request-ID")
 			down := resp.Header.Get("X-Request-ID")
 			if up == "" || down == "" {
@@ -233,7 +233,7 @@ func TestProxyRoundRobinDistribution(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 	}
 	for i := range counts {
 		if n := counts[i].Load(); n != 10 {
@@ -263,7 +263,7 @@ func TestProxyStreamsResponseIncrementally(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	type res struct {
 		line string

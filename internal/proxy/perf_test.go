@@ -67,7 +67,9 @@ func perfHandler(tb testing.TB, urls ...string) http.Handler {
 	go func() { done <- g.Run(ctx, src) }()
 	tb.Cleanup(func() {
 		cancel()
-		<-done
+		if err := <-done; err != nil {
+			tb.Logf("Run returned: %v", err)
+		}
 	})
 	cfg := cfgOf(1, []config.Route{rt("p", "", "/p", "u")}, up("u", urls...))
 	src.push(cfg)
@@ -135,7 +137,7 @@ func TestUpstreamConnectionsReusedUnderConcurrency(t *testing.T) {
 							return
 						}
 						_, _ = io.Copy(io.Discard, resp.Body)
-						resp.Body.Close()
+						_ = resp.Body.Close()
 						if resp.StatusCode != http.StatusOK {
 							errs <- fmt.Errorf("status %d", resp.StatusCode)
 						}
@@ -198,7 +200,7 @@ func BenchmarkProxy(b *testing.B) {
 						return
 					}
 					_, _ = io.Copy(io.Discard, resp.Body)
-					resp.Body.Close()
+					_ = resp.Body.Close()
 				}
 			})
 			b.StopTimer()
@@ -274,7 +276,7 @@ func TestSmallResponseIsOneWrite(t *testing.T) {
 			t.Fatal(err)
 		}
 		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if resp.StatusCode != http.StatusOK || string(body) != "ok" {
 			t.Fatalf("got %d %q", resp.StatusCode, body)
 		}
@@ -320,7 +322,7 @@ func TestStreamedResponsesAreNotBuffered(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 			got := make(chan string, 1)
 			go func() {
 				buf := make([]byte, len("data: first\n\n"))

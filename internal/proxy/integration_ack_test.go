@@ -81,7 +81,10 @@ func startAck(t *testing.T, opts Options) (*Gateway, *ackSource) {
 	t.Cleanup(func() {
 		cancel()
 		select {
-		case <-done:
+		case err := <-done:
+			if err != nil {
+				t.Logf("Run returned: %v", err)
+			}
 		case <-time.After(5 * time.Second):
 			t.Error("Run did not return after cleanup cancel")
 		}
@@ -302,7 +305,7 @@ func TestAckDiscoveryRebuildsAreNotAcknowledged(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return resp.StatusCode
 		}
 		waitFor(t, 3*time.Second, "first endpoint set to be served", func() bool { return get() == 200 })

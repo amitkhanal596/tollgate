@@ -134,10 +134,7 @@ func (a *api) listVersions(w http.ResponseWriter, r *http.Request) {
 	}
 	list := VersionList{Versions: make([]VersionItem, 0, len(infos))} // never null
 	for _, vi := range infos {
-		list.Versions = append(list.Versions, VersionItem{
-			Version: vi.Version, CreatedAt: vi.CreatedAt, Author: vi.Author,
-			Comment: vi.Comment, RolledBackFrom: vi.RolledBackFrom,
-		})
+		list.Versions = append(list.Versions, VersionItem(vi))
 	}
 	if n := len(infos); n > 0 && infos[n-1].Version > 1 {
 		list.NextBefore = infos[n-1].Version // older versions remain

@@ -175,7 +175,7 @@ func closedURL(t *testing.T) string {
 		t.Fatal(err)
 	}
 	addr := ln.Addr().String()
-	ln.Close()
+	_ = ln.Close()
 	return "http://" + addr
 }
 
@@ -272,7 +272,7 @@ func TestMetricsRequestsCountedOncePerRequest(t *testing.T) {
 				t.Fatal(err)
 			}
 			_, _ = io.Copy(io.Discard, resp.Body)
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if resp.StatusCode != tc.code {
 				t.Fatalf("status %d, want %d", resp.StatusCode, tc.code)
 			}
@@ -457,7 +457,7 @@ func TestMetricsInFlightGaugeReflectsHeldRequests(t *testing.T) {
 			resp, err := (&http.Client{Timeout: 10 * time.Second}).Get(srv.URL + "/hold")
 			if err == nil {
 				_, _ = io.Copy(io.Discard, resp.Body)
-				resp.Body.Close()
+				_ = resp.Body.Close()
 			}
 		}()
 	}
@@ -589,7 +589,7 @@ func TestMetricsLabelHygiene(t *testing.T) {
 			t.Fatal(err)
 		}
 		_, _ = io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if resp.StatusCode != 200 {
 			t.Fatalf("%s: %d", path, resp.StatusCode)
 		}
@@ -728,7 +728,7 @@ func TestAccessLogOneLinePerRequestWithRightFields(t *testing.T) {
 				t.Fatal(err)
 			}
 			body, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if resp.StatusCode != tc.status {
 				t.Fatalf("status %d, want %d", resp.StatusCode, tc.status)
 			}
@@ -825,7 +825,7 @@ func TestAccessLogCanceledAndAbortedRequests(t *testing.T) {
 		go func() {
 			resp, err := http.DefaultClient.Do(req)
 			if err == nil {
-				resp.Body.Close()
+				_ = resp.Body.Close()
 			}
 			errc <- err
 		}()
@@ -835,7 +835,9 @@ func TestAccessLogCanceledAndAbortedRequests(t *testing.T) {
 			t.Fatal("request never reached the upstream")
 		}
 		cancel()
-		<-errc
+		if err := <-errc; err != nil {
+			t.Logf("server returned: %v", err)
+		}
 
 		waitFor(t, 3*time.Second, "one access line", func() bool { return len(logs.requestLines(t)) >= 1 })
 		consistently(t, 100*time.Millisecond, "exactly one line", func() bool { return len(logs.requestLines(t)) == 1 })
@@ -853,7 +855,7 @@ func TestAccessLogCanceledAndAbortedRequests(t *testing.T) {
 			w.(http.Flusher).Flush()
 			conn, _, err := w.(http.Hijacker).Hijack()
 			if err == nil {
-				conn.Close()
+				_ = conn.Close()
 			}
 		}))
 		defer upSrv.Close()
@@ -863,7 +865,7 @@ func TestAccessLogCanceledAndAbortedRequests(t *testing.T) {
 		resp, err := newClient(t).Get(srv.URL + "/x")
 		if err == nil {
 			_, _ = io.Copy(io.Discard, resp.Body) // fails: the response was cut short
-			resp.Body.Close()
+			_ = resp.Body.Close()
 		}
 		waitFor(t, 3*time.Second, "one access line", func() bool { return len(logs.requestLines(t)) >= 1 })
 		consistently(t, 100*time.Millisecond, "exactly one line", func() bool { return len(logs.requestLines(t)) == 1 })

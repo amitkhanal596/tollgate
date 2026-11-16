@@ -21,7 +21,7 @@ func getBody(t *testing.T, c *http.Client, url string) (int, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	b, _ := io.ReadAll(resp.Body)
 	return resp.StatusCode, string(b)
 }
@@ -75,7 +75,7 @@ func TestReloadInFlightRequestFinishesOnOldSnapshot(t *testing.T) {
 			res <- result{err: err}
 			return
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		b, err := io.ReadAll(resp.Body)
 		res <- result{resp.StatusCode, string(b), err}
 	}()
@@ -133,7 +133,7 @@ func TestReloadUnderLoadDropsNothing(t *testing.T) {
 					continue
 				}
 				b, _ := io.ReadAll(resp.Body)
-				resp.Body.Close()
+				_ = resp.Body.Close()
 				if resp.StatusCode != 200 || (string(b) != "A" && string(b) != "B") {
 					bad.Add(1)
 					firstBad.CompareAndSwap(nil, fmt.Sprintf("status %d body %q", resp.StatusCode, b))

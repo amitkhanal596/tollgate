@@ -44,14 +44,14 @@ func TestErrorBackendDown502(t *testing.T) {
 		t.Fatal(err)
 	}
 	dead := "http://" + ln.Addr().String()
-	ln.Close() // nothing listens any more
+	_ = ln.Close() // nothing listens any more
 
 	srv := singleRouteGateway(t, dead)
 	resp, err := newClient(t).Get(srv.URL + "/")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusBadGateway {
 		t.Fatalf("status = %d, want 502", resp.StatusCode)
@@ -73,7 +73,7 @@ func TestErrorResponseHeaderTimeout504(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	elapsed := time.Since(start)
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusGatewayTimeout {
@@ -105,7 +105,7 @@ func TestErrorRequestTimeoutMidBody(t *testing.T) {
 	resp, err := newClient(t).Get(srv.URL + "/")
 	var readErr error
 	if err == nil {
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		_, readErr = io.ReadAll(resp.Body)
 	}
 	elapsed := time.Since(start)
@@ -141,7 +141,7 @@ func TestErrorClientCancelPropagatesToUpstream(t *testing.T) {
 	go func() {
 		resp, err := newClient(t).Do(req)
 		if err == nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 		}
 		errc <- err
 	}()
@@ -165,7 +165,7 @@ func TestErrorClientCancelPropagatesToUpstream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("gateway not serving after client cancel: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 }
 
 func TestErrorPerRouteTimeoutOverridesDefaults(t *testing.T) {
@@ -193,7 +193,7 @@ func TestErrorPerRouteTimeoutOverridesDefaults(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if resp.StatusCode != tc.want {
 				t.Fatalf("status = %d, want %d", resp.StatusCode, tc.want)
 			}

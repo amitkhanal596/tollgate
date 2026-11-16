@@ -395,7 +395,7 @@ type rsHarness struct {
 // rsTryNew calls the constructor and converts a panic (the Phase 4 stub) into
 // a value, so an unimplemented source fails each test cleanly instead of
 // crashing the whole test binary.
-func rsTryNew(opts RemoteOptions) (s *RemoteSource, err error, panicked any) {
+func rsTryNew(opts RemoteOptions) (s *RemoteSource, panicked any, err error) {
 	defer func() { panicked = recover() }()
 	s, err = NewRemoteSource(opts)
 	return
@@ -403,7 +403,7 @@ func rsTryNew(opts RemoteOptions) (s *RemoteSource, err error, panicked any) {
 
 func rsNew(t *testing.T, opts RemoteOptions) *RemoteSource {
 	t.Helper()
-	s, err, p := rsTryNew(opts)
+	s, p, err := rsTryNew(opts)
 	if p != nil {
 		t.Fatalf("NewRemoteSource panicked: %v", p)
 	}

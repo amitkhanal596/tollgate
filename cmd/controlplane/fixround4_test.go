@@ -88,7 +88,7 @@ func (c *cp) waitReady(t *testing.T) {
 		}
 		resp, err := http.Get("http://" + c.addr + "/readyz")
 		if err == nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if resp.StatusCode == 200 {
 				return
 			}
@@ -169,7 +169,7 @@ func TestFixRound4_ConcurrentSeedBothKeepRunning(t *testing.T) {
 func TestFixRound4_StreamOutlivesReadTimeout(t *testing.T) {
 	c := startCP(t, goodEnv(), "-memory-store", "-read-timeout", "200ms", "-heartbeat", "50ms")
 	lines, body := c.openStream(t, "gw-1", 0)
-	defer body.Close()
+	defer func() { _ = body.Close() }()
 	waitLine(t, lines, 2*time.Second, "first heartbeat", isHeartbeat)
 
 	time.Sleep(1500 * time.Millisecond) // 7x the read timeout
@@ -177,6 +177,7 @@ func TestFixRound4_StreamOutlivesReadTimeout(t *testing.T) {
 	waitLine(t, lines, time.Second, "heartbeat after the read timeout elapsed", isHeartbeat)
 
 	resp, b := c.do(t, "PUT", "/v1/config", adminTok, putBody)
+	_ = resp.Body.Close() // do already closed it; keeps bodyclose quiet
 	if resp.StatusCode != 200 {
 		t.Fatalf("PUT = %d: %s", resp.StatusCode, b)
 	}
@@ -193,13 +194,15 @@ func TestFixRound4_HeadPollFlagAccepted(t *testing.T) {
 		t.Run("head-poll "+v, func(t *testing.T) {
 			c := startCP(t, goodEnv(), "-memory-store", "-head-poll", v)
 			lines, body := c.openStream(t, "gw-1", 0)
-			defer body.Close()
-			if resp, b := c.do(t, "PUT", "/v1/config", adminTok, putBody); resp.StatusCode != 200 {
+			defer func() { _ = body.Close() }()
+			resp, b := c.do(t, "PUT", "/v1/config", adminTok, putBody)
+			_ = resp.Body.Close() // do already closed it; keeps bodyclose quiet
+			if resp.StatusCode != 200 {
 				t.Fatalf("PUT = %d: %s", resp.StatusCode, b)
 			}
 			// A local write still reaches local streams whatever the poller does.
 			waitLine(t, lines, 2*time.Second, "config event", func(l string) bool { return l == "id: 1" })
-			body.Close()
+			_ = body.Close()
 			if code, _ := c.stop(t); code != 0 {
 				t.Errorf("exit = %d, want 0; logs: %s", code, c.logs.String())
 			}
@@ -214,9 +217,11 @@ func TestFixRound4_HeadPollDeliversCrossReplica(t *testing.T) {
 	a := startCP(t, goodEnv(), "-database-url", dbURL, "-head-poll", "50ms")
 	b := startCP(t, goodEnv(), "-database-url", dbURL, "-head-poll", "50ms")
 	lines, body := b.openStream(t, "gw-b", 0)
-	defer body.Close()
+	defer func() { _ = body.Close() }()
 
-	if resp, out := a.do(t, "PUT", "/v1/config", adminTok, putBody); resp.StatusCode != 200 {
+	resp, out := a.do(t, "PUT", "/v1/config", adminTok, putBody)
+	_ = resp.Body.Close() // do already closed it; keeps bodyclose quiet
+	if resp.StatusCode != 200 {
 		t.Fatalf("PUT via replica A = %d: %s", resp.StatusCode, out)
 	}
 	waitLine(t, lines, 2*time.Second, "config v1 on replica B's stream", func(l string) bool { return l == "id: 1" })
@@ -246,7 +251,7 @@ func TestFixRound4_JunkMethodsKeepMetricsBounded(t *testing.T) {
 				errs <- err
 				return
 			}
-			defer conn.Close()
+			defer func() { _ = conn.Close() }()
 			_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 			method := fmt.Sprintf("JUNK%dX%s", i, strings.Repeat("Z", 200))
 			if _, err := fmt.Fprintf(conn, "%s /v1/config HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n", method); err != nil {

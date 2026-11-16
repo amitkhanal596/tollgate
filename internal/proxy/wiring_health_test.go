@@ -288,7 +288,7 @@ func TestWiringClientCancelIsNotAPassiveFailure(t *testing.T) {
 			defer cancel()
 			req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/x", nil)
 			if resp, err := http.DefaultClient.Do(req); err == nil {
-				resp.Body.Close()
+				_ = resp.Body.Close()
 			}
 			done <- struct{}{}
 		}()

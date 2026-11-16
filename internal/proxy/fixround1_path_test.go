@@ -106,14 +106,14 @@ func rawGet(t *testing.T, addr, target string) *http.Response {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { c.Close() })
+	t.Cleanup(func() { _ = c.Close() })
 	_ = c.SetDeadline(time.Now().Add(5 * time.Second))
-	fmt.Fprintf(c, "GET %s HTTP/1.1\r\nHost: gw.test\r\nConnection: close\r\n\r\n", target)
+	_, _ = fmt.Fprintf(c, "GET %s HTTP/1.1\r\nHost: gw.test\r\nConnection: close\r\n\r\n", target)
 	resp, err := http.ReadResponse(bufio.NewReader(c), nil)
 	if err != nil {
 		t.Fatalf("reading response for %q: %v", target, err)
 	}
-	t.Cleanup(func() { resp.Body.Close() })
+	t.Cleanup(func() { _ = resp.Body.Close() })
 	return resp
 }
 

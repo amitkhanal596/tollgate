@@ -44,13 +44,18 @@ func TestServeRejectsOversizedHeaders(t *testing.T) {
 	go func() {
 		done <- Serve(ctx, ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}), time.Second, nil)
 	}()
-	defer func() { cancel(); <-done }()
+	defer func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Logf("Serve returned: %v", err)
+		}
+	}()
 
 	c, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	_ = c.SetDeadline(time.Now().Add(5 * time.Second))
 	big := strings.Repeat("a", 1<<20+8192)
 	go func() { _, _ = io.WriteString(c, "GET / HTTP/1.1\r\nHost: x\r\nX-Big: "+big+"\r\n\r\n") }()
@@ -105,7 +110,7 @@ func TestTransportPoolAcrossReload(t *testing.T) {
 			out <- res{err: err}
 			return
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		out <- res{code: resp.StatusCode}
 	}()
 	<-entered
@@ -148,7 +153,7 @@ func TestInFlightReleasedOnAbortPaths(t *testing.T) {
 		resp, err := newClient(t).Get(srv.URL + "/stall")
 		if err == nil {
 			_, _ = io.ReadAll(resp.Body)
-			resp.Body.Close()
+			_ = resp.Body.Close()
 		}
 		waitFor(t, 3*time.Second, "in-flight 0", func() bool { return inFlight(t, h.g, "u", upstream.URL) == 0 })
 	})
@@ -162,12 +167,12 @@ func TestInFlightReleasedOnAbortPaths(t *testing.T) {
 		buf := make([]byte, 7)
 		_, _ = io.ReadFull(resp.Body, buf)
 		cancel()
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		waitFor(t, 3*time.Second, "in-flight 0", func() bool { return inFlight(t, h.g, "u", upstream.URL) == 0 })
 	})
 	resp, err := newClient(t).Get(srv.URL + "/ok")
 	if err != nil || resp.StatusCode != 200 {
 		t.Fatalf("follow-up failed: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 }

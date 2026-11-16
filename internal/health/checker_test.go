@@ -1,6 +1,7 @@
 package health
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -68,7 +69,7 @@ func TestFallThresholdReachedMarksDown(t *testing.T) {
 
 			f.set(500)
 			eventually(t, wait, "backend marked down", func() bool { return !b.ActiveHealthy() })
-			if got, err := lb.Next(); got != nil || err != balancer.ErrNoHealthyBackends {
+			if got, err := lb.Next(); got != nil || !errors.Is(err, balancer.ErrNoHealthyBackends) {
 				t.Fatalf("balancer still picks a down backend: %v, %v", got, err)
 			}
 		})
