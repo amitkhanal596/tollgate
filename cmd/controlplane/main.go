@@ -57,6 +57,12 @@ func main() {
 // on bad flags. It touches no process-global state (flags, env and log sink
 // are parameters), so tests can call it directly.
 func run(ctx context.Context, args []string, logOut io.Writer, getenv func(string) string) int {
+	return runWithStore(ctx, args, logOut, getenv, nil)
+}
+
+// runWithStore is run with an optional injected store. A nil store means
+// "build one from the flags"; tests inject one to simulate a hung database.
+func runWithStore(ctx context.Context, args []string, logOut io.Writer, getenv func(string) string, store controlplane.Store) int {
 	// A FlagSet local to run, never flag.CommandLine.
 	fs := flag.NewFlagSet("controlplane", flag.ContinueOnError)
 	fs.SetOutput(logOut)
@@ -67,6 +73,7 @@ func run(ctx context.Context, args []string, logOut io.Writer, getenv func(strin
 	drain := fs.Duration("drain-timeout", 10*time.Second, "how long open requests may take to finish on shutdown")
 	heartbeat := fs.Duration("heartbeat", controlplane.DefaultHeartbeat, "config stream heartbeat interval")
 	readTimeout := fs.Duration("read-timeout", 30*time.Second, "maximum time to read a whole request, body included (does not cut config streams)")
+	startupTimeout := fs.Duration("startup-timeout", 10*time.Second, "bound on each store call made during startup (head read, seed); a store that does not answer in time aborts startup")
 	headPoll := fs.Duration("head-poll", 2*time.Second, "how often to publish a store head newer than this replica has seen (0 disables)")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -102,6 +109,9 @@ func run(ctx context.Context, args []string, logOut io.Writer, getenv func(strin
 	case *readTimeout <= 0:
 		logger.Error("-read-timeout must be positive", "read_timeout", readTimeout.String())
 		return 2
+	case *startupTimeout <= 0:
+		logger.Error("-startup-timeout must be positive", "startup_timeout", startupTimeout.String())
+		return 2
 	case *headPoll < 0:
 		logger.Error("-head-poll must not be negative (0 disables it)", "head_poll", headPoll.String())
 		return 2
@@ -130,8 +140,9 @@ func run(ctx context.Context, args []string, logOut io.Writer, getenv func(strin
 		return 1
 	}
 
-	var store controlplane.Store
-	if *memStore {
+	if store != nil {
+		// Injected by a test: skip building one.
+	} else if *memStore {
 		logger.Warn("using the in-memory store: configs are not persisted and are lost on restart (development only)")
 		store = controlplane.NewMemStore()
 	} else {
@@ -157,7 +168,7 @@ func run(ctx context.Context, args []string, logOut io.Writer, getenv func(strin
 	nodes := controlplane.NewNodes(nil, 0)
 
 	if *seed != "" {
-		if err := applySeed(ctx, store, hub, *seed, logger); err != nil {
+		if err := applySeed(ctx, store, hub, *seed, *startupTimeout, logger); err != nil {
 			logger.Error("seed failed", "path", *seed, "err", err)
 			return 1
 		}
@@ -221,11 +232,20 @@ func run(ctx context.Context, args []string, logOut io.Writer, getenv func(strin
 	// Head-version gauge: initial head now, then every version the hub sees.
 	// Subscribe before reading head so no publish falls between the two.
 	headCh, cancelSub := hub.Subscribe()
-	if head, err := store.Head(ctx); err == nil {
-		cpm.SetHeadVersion(head.Version)
-	} else {
-		logger.Warn("reading head version for metrics failed", "err", err)
+	// An empty store is not an error (Head returns a version-0 config), so any
+	// error here is a real store failure or a timeout and must stop startup.
+	headCtx, cancelHead := context.WithTimeout(ctx, *startupTimeout)
+	head, err := store.Head(headCtx)
+	cancelHead()
+	if err != nil {
+		logger.Error("startup: reading store head failed", "err", err, "startup_timeout", startupTimeout.String())
+		// Nothing else has started yet; release what was acquired. The pool
+		// is closed by its defer.
+		cancelSub()
+		_ = ln.Close()
+		return 1
 	}
+	cpm.SetHeadVersion(head.Version)
 	background.Add(2)
 	go func() {
 		defer background.Done()
@@ -316,8 +336,9 @@ func run(ctx context.Context, args []string, logOut io.Writer, getenv func(strin
 // applySeed stores the YAML file at path as the first version, but only if
 // the store is still empty. A non-empty store is left alone: the stored
 // config is the source of truth, the seed is only a bootstrap.
-func applySeed(ctx context.Context, store controlplane.Store, hub *controlplane.Hub, path string, logger *slog.Logger) error {
-	ctx, cancel := context.WithTimeout(ctx, controlplane.DefaultStoreTimeout)
+func applySeed(ctx context.Context, store controlplane.Store, hub *controlplane.Hub, path string, timeout time.Duration, logger *slog.Logger) error {
+	// One budget for the Head read and the Update, so a hung store cannot stall startup.
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	head, err := store.Head(ctx)
 	if err != nil {
@@ -457,12 +478,14 @@ func (w *statusWriter) Write(p []byte) (int, error) {
 	return w.ResponseWriter.Write(p)
 }
 
-func (w *statusWriter) Flush() {
-	w.wroteHeader = true
-	if f, ok := w.ResponseWriter.(http.Flusher); ok {
-		f.Flush()
-	}
+// FlushError flushes through http.ResponseController so a write error reaches
+// the caller and a non-flushable writer yields http.ErrNotSupported.
+func (w *statusWriter) FlushError() error {
+	w.wroteHeader = true // a flush sends the headers (implicit 200)
+	return http.NewResponseController(w.ResponseWriter).Flush()
 }
+
+func (w *statusWriter) Flush() { _ = w.FlushError() }
 
 func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
