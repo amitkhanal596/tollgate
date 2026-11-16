@@ -37,3 +37,19 @@ Shutdown: `-shutdown-delay 5s` + `-drain-timeout 15s` fit inside
 gateway keeps serving, so endpoint removal can finish before the listener closes.
 `kubectl -n tollgate rollout restart deploy/gateway` drops no requests
 (`maxUnavailable: 0`).
+
+## Demo caveats
+
+- **Rate limit is per gateway instance.** There are 2 gateway replicas and no
+  shared limiter state, so the seed's "5 req/s per client" is effectively up
+  to 10 req/s (ADR 0004).
+- **Consul is a `-dev` agent with no ACLs and no persistence.** Demo only: any
+  pod in the cluster can register a "demo" instance pointing anywhere. The
+  readiness probe runs `consul info | grep 'leader = true'` because
+  `/v1/status/leader` returns 200 with an empty body before a leader exists.
+  After a Consul restart the demo pods re-register within about 15 s.
+- **Port clash with Compose.** kind maps `127.0.0.1:8080` on the host, which
+  is also the Compose gateway's port. Run `make down` before creating the
+  kind cluster (or the reverse).
+- **No fault injection.** The demo pods run without `-fault-injection`, so
+  `/admin/fail` returns 404 through the gateway. Only the bench stack enables it.

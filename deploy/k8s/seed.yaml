@@ -23,6 +23,8 @@ routes:
     upstream: demo
 
   # Authenticated and rate limited: 5 req/s sustained, bursts of 10, per client.
+  # NOTE: the limit is enforced per gateway instance (no shared state). With 2
+  # gateway replicas (Kubernetes) one client can get up to 2x this. Compose runs 1.
   - name: api
     path_prefix: /api
     upstream: demo

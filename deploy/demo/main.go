@@ -3,9 +3,13 @@
 //
 //   - any path returns {"service","instance","path"} as JSON
 //   - /healthz is the health-check target (Consul and the gateway probe it)
-//   - it registers itself in Consul at startup and deregisters on SIGTERM
-//   - POST /admin/fail?mode=500|slow|unhealthy|off injects faults for the chaos
-//     script. DEMO ONLY: it is unauthenticated, never expose it.
+//   - it registers itself in Consul at startup, re-registers if Consul forgets
+//     it (e.g. a Consul dev-agent restart), and deregisters on SIGTERM
+//   - with -fault-injection, POST /admin/fail?mode=500|slow|unhealthy|off
+//     injects faults for the chaos script. DEMO ONLY: it is unauthenticated and
+//     OFF by default, because the gateway forwards "/" to this service and
+//     any client could otherwise break the backends. Without the flag the path
+//     answers 404.
 //   - "-probe URL[,URL...]" makes the binary an HTTP health probe and exits, so
 //     distroless containers (no shell, no curl) can have a healthcheck.
 //
@@ -39,13 +43,18 @@ const (
 	modeUnhealthy = "unhealthy"
 )
 
-const slowDelay = 2 * time.Second
+const (
+	slowDelay    = 2 * time.Second
+	probeTimeout = 2 * time.Second
+)
 
 type server struct {
 	name     string
 	instance string
 	mode     atomic.Value // string
 	sleep    func(context.Context, time.Duration)
+	// faultInjection enables POST /admin/fail (chaos testing only).
+	faultInjection bool
 }
 
 func newServer(name, instance string) *server {
@@ -74,7 +83,13 @@ func (s *server) handler() http.Handler {
 		}
 		_, _ = io.WriteString(w, "ok\n")
 	})
+	// Registered unconditionally so that, with the flag off, the catch-all "/"
+	// handler cannot answer 200 for this path: it is a clean 404.
 	mux.HandleFunc("/admin/fail", func(w http.ResponseWriter, r *http.Request) {
+		if !s.faultInjection {
+			http.NotFound(w, r)
+			return
+		}
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", http.MethodPost)
 			http.Error(w, "use POST", http.StatusMethodNotAllowed)
@@ -127,6 +142,9 @@ func run(args []string) int {
 	consul := fs.String("consul-addr", getenv("DEMO_CONSUL_ADDR", ""), "host:port of Consul; empty disables registration")
 	svc := fs.String("service", getenv("DEMO_SERVICE", "demo"), "Consul service name")
 	advertise := fs.String("advertise-addr", getenv("DEMO_ADVERTISE_ADDR", ""), "address Consul and the gateway use to reach this instance (default: first non-loopback IPv4)")
+	faults := fs.Bool("fault-injection", false, "enable POST /admin/fail (demo/chaos only; unauthenticated)")
+	deregDelay := fs.Duration("deregister-delay", 2*time.Second, "keep serving this long after deregistering from Consul, so the gateway's watch catches up")
+	reregister := fs.Duration("reregister-interval", 15*time.Second, "how often to check that Consul still knows this instance")
 	probe := fs.String("probe", "", "comma-separated URLs: GET each, exit 0 only if all return 2xx (container healthcheck mode)")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -149,6 +167,7 @@ func run(args []string) int {
 	}
 	_, portStr, _ := net.SplitHostPort(ln.Addr().String())
 	s := newServer(*name, host)
+	s.faultInjection = *faults
 	srv := &http.Server{Handler: s.handler(), ReadHeaderTimeout: 5 * time.Second}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.Serve(ln) }()
@@ -167,7 +186,7 @@ func run(args []string) int {
 			consul: *consul, id: *svc + "-" + *name, service: *svc,
 			addr: addr, port: port, client: &http.Client{Timeout: 3 * time.Second}, logger: logger,
 		}
-		go func() { defer close(regDone); reg.registerWithRetry(ctx) }()
+		go func() { defer close(regDone); reg.keepRegistered(ctx, *reregister) }()
 	} else {
 		close(regDone)
 	}
@@ -186,6 +205,9 @@ func run(args []string) int {
 		dctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		reg.deregister(dctx)
 		cancel()
+		// The gateway learns about the removal via its Consul watch; keep
+		// answering until then so in-flight picks do not hit a closed port.
+		time.Sleep(*deregDelay)
 	}
 	sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -194,7 +216,9 @@ func run(args []string) int {
 }
 
 func runProbe(urls []string) int {
-	c := &http.Client{Timeout: 3 * time.Second}
+	// Per-URL timeout x number of URLs must stay below the compose healthcheck
+	// timeout (5s for two URLs), so a slow target fails the probe cleanly.
+	c := &http.Client{Timeout: probeTimeout}
 	for _, u := range urls {
 		resp, err := c.Get(strings.TrimSpace(u))
 		if err != nil {
@@ -241,21 +265,68 @@ func (r *registration) body() []byte {
 	return b
 }
 
-// registerWithRetry loops until Consul accepts the registration or ctx ends,
-// because in Compose Consul may still be starting.
-func (r *registration) registerWithRetry(ctx context.Context) {
-	for {
-		err := r.put(ctx, "/v1/agent/service/register?replace-existing-checks=true", r.body())
-		if err == nil {
-			r.logger.Info("registered in consul", "id", r.id, "addr", r.addr, "port", r.port)
-			return
-		}
-		r.logger.Warn("consul registration failed, retrying", "err", err)
+// keepRegistered registers (retrying every second while Consul starts) and
+// then, every interval, re-registers if Consul no longer knows this instance.
+// Consul runs in -dev mode (memory only), so a restart forgets everything.
+// It returns when ctx ends, which is its only shutdown path.
+func (r *registration) keepRegistered(ctx context.Context, interval time.Duration) {
+	retry := time.Second
+	for !r.register(ctx) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(time.Second):
+		case <-time.After(retry):
 		}
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		known, err := r.known(ctx)
+		if err == nil && known {
+			continue
+		}
+		// Unknown to Consul, or Consul unreachable: try to (re-)register.
+		if err != nil {
+			r.logger.Warn("consul check failed", "err", err)
+		}
+		r.register(ctx)
+	}
+}
+
+func (r *registration) register(ctx context.Context) bool {
+	if err := r.put(ctx, "/v1/agent/service/register?replace-existing-checks=true", r.body()); err != nil {
+		r.logger.Warn("consul registration failed", "err", err)
+		return false
+	}
+	r.logger.Info("registered in consul", "id", r.id, "addr", r.addr, "port", r.port)
+	return true
+}
+
+// known reports whether Consul still has this service. Checking first (instead
+// of blindly re-PUTting) avoids resetting the health check to critical every
+// interval.
+func (r *registration) known(ctx context.Context) (bool, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+r.consul+"/v1/agent/service/"+r.id, nil)
+	if err != nil {
+		return false, err
+	}
+	resp, err := r.client.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return true, nil
+	case http.StatusNotFound:
+		return false, nil
+	default:
+		return false, fmt.Errorf("consul %s", resp.Status)
 	}
 }
 

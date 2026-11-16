@@ -10,7 +10,8 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Only superseded PR pushes are cancelled; every commit on main gets a result.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   lint:
@@ -22,6 +23,7 @@ jobs:
           go-version-file: go.mod
       - uses: golangci/golangci-lint-action@v8.0.0
         with:
+          # Keep identical to GOLANGCI_LINT_VERSION in the Makefile (`make lint`).
           version: v2.15.0
 
   test:
@@ -79,7 +81,7 @@ jobs:
 
   image:
     runs-on: ubuntu-24.04
-    needs: [build]
+    needs: [lint, test, build]
     strategy:
       matrix:
         target: [gateway, controlplane, demo]

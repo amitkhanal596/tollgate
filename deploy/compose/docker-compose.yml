@@ -77,6 +77,8 @@ services:
 
   demo-1:
     <<: *demo
+    # No -fault-injection here: the gateway forwards "/" to these, so /admin/fail
+    # must not be reachable by clients. The bench override turns it on.
     command: ["-name", "demo-1", "-consul-addr", "consul:8500", "-service", "demo"]
     hostname: demo-1
   demo-2:
@@ -100,13 +102,16 @@ services:
       demo-2: { condition: service_healthy }
       demo-3: { condition: service_healthy }
     healthcheck:
+      # Two URLs at 2s each (probeTimeout in deploy/demo) fit in the 5s
+      # timeout, so a slow target makes the probe fail cleanly, not time out.
       test: ["CMD", "/demo", "-probe", "http://gateway:9090/readyz,http://controlplane:9000/readyz"]
       interval: 2s
-      timeout: 4s
+      timeout: 5s
       retries: 30
+      start_period: 20s
 
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.11.0
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.retention.time=2d
@@ -122,8 +127,12 @@ services:
       retries: 30
 
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:12.4.0
     environment:
+      # DEMO-ONLY admin password (default is admin/admin otherwise). Override
+      # with GRAFANA_ADMIN_PASSWORD=... in the environment. Anonymous visitors
+      # get read-only Viewer access; log in at /login as "admin" to edit.
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-DEMO-ONLY-grafana-admin}
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
       GF_AUTH_DISABLE_LOGIN_FORM: "false"

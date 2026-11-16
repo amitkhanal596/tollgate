@@ -23,6 +23,7 @@ routes:
     upstream: demo
 
   # Authenticated and rate limited: 5 req/s sustained, bursts of 10, per client.
+  # NOTE: the limit is per gateway instance; scaling the gateway multiplies it.
   - name: api
     path_prefix: /api
     upstream: demo

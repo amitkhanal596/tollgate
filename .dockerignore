@@ -1,10 +1,24 @@
+# Keep the build context small and the Go build layer stable. go.mod, go.sum,
+# cmd/, internal/ (incl. go:embed'd migrations/*.sql) and deploy/demo/ must
+# stay in the context.
 .git
 .github
 .claude
-bench/results
-docs
+.golangci.yml
+.env
+.env.*
+bin/
+coverage.out
+*.out
+*.test
+bench/
+docs/
 gateway
 *.md
+KICKOFF.md
+Makefile
+# Deployment manifests are not needed to compile; deploy/demo (Go) and
+# deploy/Dockerfile are.
 deploy/k8s
 deploy/compose
 deploy/grafana

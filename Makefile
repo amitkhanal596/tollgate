@@ -1,6 +1,8 @@
 # Tollgate developer tasks. `make help` lists them.
 COMPOSE   := docker compose -f deploy/compose/docker-compose.yml
 COVER_MIN := 80
+# Keep identical to the golangci-lint version pinned in .github/workflows/ci.yml.
+GOLANGCI_LINT_VERSION := v2.15.0
 BENCH_COMPOSE := docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.bench.yml
 DEMO_KEY  := demo-api-key-tollgate-0001
 ADMIN_TOK := DEMO-ONLY-admin-token-0123456789abcdef-change-me
@@ -22,7 +24,7 @@ cover: ## internal/ coverage; fails under $(COVER_MIN)%
 
 lint: ## golangci-lint (local binary, else the Docker image)
 	@if command -v golangci-lint >/dev/null; then golangci-lint run ./...; \
-	else docker run --rm -v "$$PWD":/src -w /src golangci/golangci-lint:v2.15.0 golangci-lint run ./...; fi
+	else docker run --rm -v "$$PWD":/src -w /src golangci/golangci-lint:$(GOLANGCI_LINT_VERSION) golangci-lint run ./...; fi
 
 build: ## build both binaries into bin/
 	CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/gateway ./cmd/gateway

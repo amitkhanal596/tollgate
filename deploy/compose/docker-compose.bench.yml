@@ -25,9 +25,9 @@ services:
   controlplane:
     volumes: ["./bench.yaml:/etc/tollgate/seed.yaml:ro"]
 
-  demo-1: { restart: "no" }
-  demo-2: { restart: "no" }
-  demo-3: { restart: "no" }
+  demo-1: { restart: "no", command: ["-name", "demo-1", "-consul-addr", "consul:8500", "-service", "demo", "-fault-injection"] }
+  demo-2: { restart: "no", command: ["-name", "demo-2", "-consul-addr", "consul:8500", "-service", "demo", "-fault-injection"] }
+  demo-3: { restart: "no", command: ["-name", "demo-3", "-consul-addr", "consul:8500", "-service", "demo", "-fault-injection"] }
 
   prometheus: { profiles: ["monitoring"] }
   grafana: { profiles: ["monitoring"] }
