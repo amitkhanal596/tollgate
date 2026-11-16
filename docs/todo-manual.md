@@ -9,7 +9,7 @@ This is the list the build could not finish on its own, or should not decide for
 | 1 | **`internal/controlplane` is outside the layout in `CLAUDE.md`.** It was added so the admin API, store and SSE hub are testable and count toward the 80% coverage target. | Accept it, or update the layout line in `CLAUDE.md` so the rule and the repo agree. |
 | 2 | **The repo has never been pushed.** There is no remote. All commits are on `main` (the repo started empty in this session, so there was no branch to protect). | Create the GitHub repo and push when you are ready. Nothing was sent to any outside service. |
 | 3 | **CI has never run on GitHub.** `.github/workflows/ci.yml` was checked by reading it and by running the same commands locally (`make test`, `make cover`, `make lint`, `make bench-test`, image builds). The Postgres and Consul service containers in the `test` job have not been exercised by a real runner. | After pushing, watch the first run. Expect small fixes (action versions, service health timing). |
-| 4 | **Leftover benchmark files were not deleted.** `bench/results/raw/` (git-ignored) holds the first, superseded run `20261116T054500Z`, some smoke directories, and one empty directory `manual-20261116T114813Z`. A cleanup command from an agent was blocked by the permission system, and I did not run it on the agent's behalf. | Keep `bench/results/raw/20261116T162040Z` (the raw data behind `RESULTS.md`). Delete the rest if you want: `ls bench/results/raw` first, then remove the directories you do not need. |
+| 4 | **Leftover benchmark files were not deleted.** `bench/results/raw/` (git-ignored, so it is never pushed) holds four superseded runs (`20261116T012935Z`, `013309Z`, `053626Z`, `054500Z`), the final run `20261116T162040Z`, and one empty directory `manual-20261116T114813Z`. Smoke output is in `bench/results/smoke/` (also git-ignored). A cleanup command from an agent was blocked by the permission system, and I did not run it on the agent's behalf. | Keep `bench/results/raw/20261116T162040Z` (the raw data behind `RESULTS.md`; only the six kill-case logs are committed, under `bench/results/evidence/`). Delete the rest if you want: `ls bench/results/raw` first, then remove the directories you do not need. |
 
 ## 2. Benchmarks: re-run them on a quiet machine
 
@@ -22,7 +22,7 @@ The numbers in the README are real and come from one complete run, but the rig w
 
 To do:
 
-1. Plug in AC power, close memory-heavy apps (or reboot), keep the lid open, then run `make bench-all` (about 40 minutes). Do not use the machine while it runs, and do not commit during the run (the provenance check compares the commit at every stage).
+1. Plug in AC power, close memory-heavy apps (or reboot), keep the lid open, then run `make bench-all` (about 45 minutes; the recorded run took 39). Do not use the machine while it runs, and do not commit during the run (the provenance check compares the commit at every stage).
 2. Check `bench/results/RESULTS.md` says `complete: yes` with no host warnings, then update the README table from it. `make bench-test` checks the analysis code.
 3. For a real capacity number, run the load generator on a second machine and raise the top step in `bench/k6/maxrps.js`. On one laptop the generator and the gateway share the CPU.
 4. The first run's results (commit `d693166`) were wrong in several ways and were replaced. The story is in [progress.md](progress.md) Phase 8; do not quote those numbers.
@@ -48,6 +48,7 @@ Smaller things:
 
 - With `-pprof`, a CPU profile still running at shutdown will probably outlast the admin listener's 2 s drain, and the gateway would then exit with code 1. Read from the code, not tested.
 - Docker images are pinned by tag, not by digest.
+- `TestFileSourceUnstableContentNotApplied` still depends on the wall clock. It flaked once under load, and now has ten times the margin and skips itself if the machine stalls for a whole poll interval. A proper fix is an injectable tick channel in `FileSource`.
 - The Consul dev agent in the demo has no ACLs, and Grafana uses a demo-only admin password. Both are labelled in the Compose file.
 
 ## 4. Verified locally, not elsewhere

@@ -114,7 +114,7 @@ Everything below was measured on one laptop. The load generator ran on the same 
 | Rate limiter, polite key | 750 requests, 0 rejected | Checks isolation only. |
 | Hot reload, config changes | 100 changes (90 route PUTs, 10 rollbacks) in a 58 s load window | 300 rps fast traffic and 100 rps slow traffic. |
 | Hot reload, requests | 23314 total; 0 non-2xx; 0 connection errors | 5150 requests spanned at least one change, and 0 of them failed. |
-| Hot reload, propagation p50 | 4.0 ms lower bound, 7.0 ms upper bound | Clock resolution 1 ms. |
+| Hot reload, propagation p50 | 4.0 ms lower bound, 7.0 ms upper bound | Clock resolution 1 ms; each figure includes about one request round trip. |
 | Failover | See the table below | Killed backend or backend answering 500. 3 runs per case. |
 
 Failover, min / median / max over 3 runs each. "Failed in first cluster" is the number of client requests that failed in the first failure cluster. "Back in rotation" is measured from the restore.
@@ -132,7 +132,7 @@ The three failover upstreams all use passive health: a backend is ejected after 
 
 - **Backend answers 500 (all three configs).** The backend is ejected after 3 failed requests, about 0.04 s at 200 rps.
 - **Backend killed, static backends (`passive-kill`, `active-kill`).** 3-4 requests fail. The gateway dials these backends by name. Docker's DNS stops resolving a killed container's name, so each dial fails at once with `no such host`, and ejection takes tens of milliseconds. The failover time of about 1.02 s in the table is one request that was mid-dial and waited for the 1 s dial timeout that the benchmark sets. One `passive-kill` run had no such request, and its failover time was 0.025 s.
-- **Backend killed, Consul-discovered backends (`consul-kill`).** 69 requests fail and failover takes about 2.03 s. The gateway reaches these backends by IP address. A killed container's IP silently drops packets, so every dial waits the full 1 s dial timeout. Passive ejection counts completed failures, so it cannot eject the backend until the first three dials have timed out, about 1 s. Every request sent to that backend in that second fails after waiting 1 s. In the logs, 67 of the 69 failures took about 1000 ms.
+- **Backend killed, Consul-discovered backends (`consul-kill`).** 69 requests fail and failover takes about 2.03 s. The gateway reaches these backends by IP address. A killed container's IP silently drops packets, so every dial waits the full 1 s dial timeout. Passive ejection counts a failure when the request completes. Two requests failed at once; with those, the first dial timeout, about 1 s after the kill, is the third consecutive failure and ejects the backend. Every request sent to it before then fails after waiting 1 s: 67 of the 69 failures took about 1000 ms (logs and a script in [bench/results/evidence/failover-kill](bench/results/evidence/failover-kill/README.md)).
 
 This is a limit of the current design. A backend that drops packets costs about one dial timeout of failed requests. A shorter `timeouts.dial` shrinks the window. The benchmark uses 1 s, and the default is 2 s. Retrying on another backend would hide it, but retries are not implemented.
 
@@ -210,7 +210,7 @@ The repo has not been pushed yet, so this workflow has not run on GitHub.
 ## Benchmarks
 
 ```sh
-make bench-all            # bench + chaos, about 40 minutes. Needs Docker.
+make bench-all            # bench + chaos, about 45 minutes (the recorded run took 39). Needs Docker.
 SMOKE=1 make bench-all    # about 5 minutes. Proves the scripts work. Do not quote its numbers.
 make bench                # overhead, max throughput, limiter (about 26 minutes)
 make chaos                # hot reload and failover, 6 cases x 3 runs (about 18 minutes)

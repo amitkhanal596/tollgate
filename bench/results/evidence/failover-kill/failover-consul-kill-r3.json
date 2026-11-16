@@ -1,0 +1,49 @@
+{
+  "test": "failover",
+  "id": "consul-kill-r3",
+  "path": "/fo-consul",
+  "mode": "kill",
+  "rate_rps": 200,
+  "victim": "demo-1",
+  "fault_s": 16.1,
+  "requests": 8401,
+  "failed": 69,
+  "failed_by_status": {
+    "502": 69
+  },
+  "failed_before_fault": 0,
+  "failed_during_fault": 69,
+  "failed_after_restore": 0,
+  "failure_window": {
+    "first_offset_s": -0.002,
+    "last_offset_s": 1.019,
+    "span_s": 1.021
+  },
+  "failure_clusters": [
+    {
+      "start_offset_s": -0.002,
+      "end_offset_s": 1.019,
+      "visible_end_offset_s": 2.02010009765625,
+      "count": 69,
+      "max_latency_ms": 1002.5
+    }
+  ],
+  "first_failure_offset_s": -0.002,
+  "failover_time_s": 2.02010009765625,
+  "failover_failed_requests": 69,
+  "failover_max_latency_ms": 1002.5,
+  "reprobe_failures": 0,
+  "reprobe_clusters": 0,
+  "reprobe_failures_per_cooloff": 0.0,
+  "failed_after_first_cluster": 0,
+  "victim_served_before_fault": 299,
+  "recovery_s": 1.585,
+  "recovery_note": "first 200 served by the victim after restore",
+  "fault_start_ms": 1794848181229.0,
+  "restore_ms": 1794848197477.0,
+  "log_span_s": 42.001,
+  "case": "consul-kill",
+  "config": "consul",
+  "run": 3,
+  "seed": "291927372"
+}

@@ -1,0 +1,63 @@
+{
+  "test": "failover",
+  "id": "passive-kill-r3",
+  "path": "/fo-passive",
+  "mode": "kill",
+  "rate_rps": 200,
+  "victim": "demo-1",
+  "fault_s": 20.4,
+  "requests": 9200,
+  "failed": 6,
+  "failed_by_status": {
+    "502": 6
+  },
+  "failed_before_fault": 0,
+  "failed_during_fault": 6,
+  "failed_after_restore": 0,
+  "failure_window": {
+    "first_offset_s": 0.012,
+    "last_offset_s": 20.081,
+    "span_s": 20.069
+  },
+  "failure_clusters": [
+    {
+      "start_offset_s": 0.012,
+      "end_offset_s": 0.056,
+      "visible_end_offset_s": 1.02660009765625,
+      "count": 4,
+      "max_latency_ms": 1000.6
+    },
+    {
+      "start_offset_s": 10.066,
+      "end_offset_s": 10.066,
+      "visible_end_offset_s": 10.072300048828126,
+      "count": 1,
+      "max_latency_ms": 6.3
+    },
+    {
+      "start_offset_s": 20.081,
+      "end_offset_s": 20.081,
+      "visible_end_offset_s": 20.091199951171873,
+      "count": 1,
+      "max_latency_ms": 10.2
+    }
+  ],
+  "first_failure_offset_s": 0.012,
+  "failover_time_s": 1.02660009765625,
+  "failover_failed_requests": 4,
+  "failover_max_latency_ms": 1000.6,
+  "reprobe_failures": 2,
+  "reprobe_clusters": 2,
+  "reprobe_failures_per_cooloff": 0.9803921568627451,
+  "failed_after_first_cluster": 2,
+  "victim_served_before_fault": 302,
+  "recovery_s": 9.533,
+  "recovery_note": "first 200 served by the victim after restore",
+  "fault_start_ms": 1794847657946.0,
+  "restore_ms": 1794847678509.0,
+  "log_span_s": 45.995,
+  "case": "passive-kill",
+  "config": "passive",
+  "run": 3,
+  "seed": "291927372"
+}
