@@ -18,9 +18,11 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/pprof"
 	"net/url"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -198,6 +200,8 @@ func runGateway(ctx context.Context, args []string, logOut io.Writer, getenv fun
 	shutdownDelay := fs.Duration("shutdown-delay", 0,
 		"after a shutdown signal, how long to keep serving while /readyz reports 503, so load balancers stop sending traffic first")
 	poll := fs.Duration("config-poll", 2*time.Second, "how often to check the config file for changes")
+	pprofOn := fs.Bool("pprof", false,
+		"DEBUG ONLY: serve net/http/pprof under /debug/pprof/ on the admin listener and sample mutex and block profiles; keep off in production")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -378,6 +382,17 @@ func runGateway(ctx context.Context, args []string, logOut io.Writer, getenv fun
 	gw := proxy.New(opts)
 	var shuttingDown atomic.Bool
 
+	if *pprofOn {
+		// Mutex and block profiles are empty unless sampling is on. These are
+		// process-wide runtime settings, so they are reset on exit; the
+		// sampling cost is why -pprof is a debugging switch only.
+		runtime.SetMutexProfileFraction(pprofMutexFraction)
+		runtime.SetBlockProfileRate(pprofBlockRateNs)
+		defer runtime.SetMutexProfileFraction(0)
+		defer runtime.SetBlockProfileRate(0)
+		logger.Warn("pprof enabled on the admin listener (/debug/pprof/); debugging only")
+	}
+
 	// Every goroutine started below reports at most one error, and there
 	// are at most four of them, so no send ever blocks, even after run has
 	// stopped reading.
@@ -428,7 +443,7 @@ func runGateway(ctx context.Context, args []string, logOut io.Writer, getenv fun
 		return proxy.Serve(trafficCtx, trafficLn, gw, *drain, logger)
 	})
 	start(&admin, "admin server", func() error {
-		return proxy.Serve(adminCtx, adminLn, adminHandler(gw, &shuttingDown, metrics.Handler(reg)), adminDrain, logger)
+		return proxy.Serve(adminCtx, adminLn, adminHandler(gw, &shuttingDown, metrics.Handler(reg), *pprofOn), adminDrain, logger)
 	})
 	if remote != nil {
 		logger.Info("gateway started", "listen", trafficLn.Addr().String(),
@@ -498,12 +513,29 @@ func runGateway(ctx context.Context, args []string, logOut io.Writer, getenv fun
 	return 0
 }
 
+// Sampling rates used only with -pprof: about 1 in 100 mutex contention
+// events, and blocking events of 10 us or more.
+const (
+	pprofMutexFraction = 100
+	pprofBlockRateNs   = 10_000
+)
+
 // adminHandler serves the liveness and readiness probes and the metrics.
 // They live only on the admin listener, never on the traffic port (section
 // 11 row 19). /readyz stays 503 until the first config has been applied.
-func adminHandler(gw *proxy.Gateway, shuttingDown *atomic.Bool, metricsHandler http.Handler) http.Handler {
+// With withPprof it also serves the profiling endpoints (debugging only).
+func adminHandler(gw *proxy.Gateway, shuttingDown *atomic.Bool, metricsHandler http.Handler, withPprof bool) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /metrics", metricsHandler)
+	if withPprof {
+		// Registered on our own mux explicitly: the package's init also
+		// registers on http.DefaultServeMux, which nothing here serves.
+		mux.HandleFunc("/debug/pprof/", pprof.Index)
+		mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+		mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+		mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	}
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("ok\n"))
 	})
