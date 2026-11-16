@@ -310,7 +310,9 @@ func TestStreamsDoNotStarveOtherRoutesOnSameBackend(t *testing.T) {
 		front.CloseClientConnections()
 		front.Close()
 		cancel()
-		<-done
+		if err := <-done; err != nil {
+			t.Logf("gateway run: %v", err)
+		}
 	})
 	waitFor(t, 3*time.Second, "config applied", func() bool { return g.Version() == cfg.Version })
 

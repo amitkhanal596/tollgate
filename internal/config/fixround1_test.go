@@ -76,29 +76,57 @@ func TestFileSourceSteadyFileDeliveredAfterDebounce(t *testing.T) {
 	}
 }
 
-// Content that keeps changing every poll is never applied while unstable.
+// Content that keeps changing between polls is never applied while unstable.
+//
+// FileSource has no injectable clock or tick channel, so the polls cannot be
+// driven by hand. Instead the poll interval is long (200 ms) and the file is
+// rewritten every 20 ms: for the debounce to wrongly fire, the writer would
+// have to stall for more than a whole poll interval (10x the write period,
+// versus 3x before). If such a stall is observed the run is inconclusive and
+// is skipped rather than reported as a false failure.
 func TestFileSourceUnstableContentNotApplied(t *testing.T) {
-	path, ch, _ := start(t, doc(1))
+	const (
+		interval    = 200 * time.Millisecond
+		writeEvery  = 20 * time.Millisecond
+		unstableFor = 5 * interval
+	)
+	path := filepath.Join(t.TempDir(), "tollgate.yaml")
+	writeFile(t, path, doc(1))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, err := NewFileSource(path, interval, quietLogger()).Watch(ctx)
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
 	recv(t, ch)
-	stop := time.After(12 * poll)
-	i := 100
-loop:
-	for {
-		select {
-		case <-stop:
-			break loop
-		default:
-		}
-		i++
+
+	deadline := time.Now().Add(unstableFor)
+	last := time.Now()
+	var maxGap time.Duration
+	for i := 100; time.Now().Before(deadline); i++ {
 		writeFile(t, path, doc(i))
-		time.Sleep(poll / 3)
+		if gap := time.Since(last); gap > maxGap {
+			maxGap = gap
+		}
+		last = time.Now()
+		time.Sleep(writeEvery)
 		select {
 		case c := <-ch:
-			// A delivery is only acceptable if the file then stayed the same
-			// for two polls; writing every poll/3 can never satisfy that.
+			if maxGap >= interval {
+				t.Skipf("writer stalled %v (>= poll interval); premise not established", maxGap)
+			}
 			t.Fatalf("delivered version %d while the file was still changing", c.Version)
 		default:
 		}
+	}
+	if maxGap >= interval {
+		t.Skipf("writer stalled %v (>= poll interval); premise not established", maxGap)
+	}
+
+	// Positive control: once the content stops changing it IS delivered.
+	writeFile(t, path, doc(999))
+	if c := recv(t, ch); c.Version != 999 {
+		t.Fatalf("stable content: version = %d, want 999", c.Version)
 	}
 }
 

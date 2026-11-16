@@ -134,7 +134,16 @@ func getenv(k, def string) string {
 
 func main() { os.Exit(run(os.Args[1:])) }
 
+// run owns the process-level signal handling; runCtx holds the logic so that
+// tests can drive it with their own context instead of real signals.
 func run(args []string) int {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return runCtx(ctx, args)
+}
+
+// runCtx runs the demo until ctx is cancelled (or the server fails).
+func runCtx(ctx context.Context, args []string) int {
 	host, _ := os.Hostname()
 	fs := flag.NewFlagSet("demo", flag.ContinueOnError)
 	name := fs.String("name", getenv("DEMO_NAME", host), "instance name shown in responses")
@@ -157,7 +166,13 @@ func run(args []string) int {
 	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	if err := validateIntervals(*reregister, *deregDelay); err != nil {
+		logger.Error("invalid flag", "err", err)
+		return 2
+	}
+	// Derived context so that "stop" below cancels the registration goroutine
+	// without needing the caller's context to end.
+	ctx, stop := context.WithCancel(ctx)
 	defer stop()
 
 	ln, err := net.Listen("tcp", *listen)
@@ -213,6 +228,18 @@ func run(args []string) int {
 	defer cancel()
 	_ = srv.Shutdown(sctx)
 	return code
+}
+
+// validateIntervals rejects values that would panic (a non-positive ticker
+// interval) or make no sense (a negative sleep).
+func validateIntervals(reregister, deregDelay time.Duration) error {
+	if reregister <= 0 {
+		return fmt.Errorf("-reregister-interval must be > 0, got %v", reregister)
+	}
+	if deregDelay < 0 {
+		return fmt.Errorf("-deregister-delay must be >= 0, got %v", deregDelay)
+	}
+	return nil
 }
 
 func runProbe(urls []string) int {
@@ -287,10 +314,19 @@ func (r *registration) keepRegistered(ctx context.Context, interval time.Duratio
 		case <-t.C:
 		}
 		known, err := r.known(ctx)
+		var se *statusError
+		if errors.As(err, &se) {
+			// Consul answered but not with 200/404 (ACL denial, 5xx). Re-sending
+			// the registration would reset the health check to critical, so
+			// wait for the next tick instead.
+			r.logger.Warn("consul lookup returned unexpected status; not re-registering", "err", err)
+			continue
+		}
 		if err == nil && known {
 			continue
 		}
-		// Unknown to Consul, or Consul unreachable: try to (re-)register.
+		// Unknown to Consul (404), or Consul unreachable (transport error,
+		// e.g. restarting): try to (re-)register.
 		if err != nil {
 			r.logger.Warn("consul check failed", "err", err)
 		}
@@ -326,9 +362,14 @@ func (r *registration) known(ctx context.Context) (bool, error) {
 	case http.StatusNotFound:
 		return false, nil
 	default:
-		return false, fmt.Errorf("consul %s", resp.Status)
+		return false, &statusError{status: resp.Status}
 	}
 }
+
+// statusError means Consul answered with an HTTP status we do not act on.
+type statusError struct{ status string }
+
+func (e *statusError) Error() string { return "consul " + e.status }
 
 func (r *registration) deregister(ctx context.Context) {
 	if err := r.put(ctx, "/v1/agent/service/deregister/"+r.id, nil); err != nil {

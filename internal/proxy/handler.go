@@ -235,8 +235,11 @@ func (g *Gateway) record(ex *exchange, r *http.Request) {
 // recorder captures the final status and the body bytes written to the
 // client. It forwards Flush and exposes Unwrap, so streaming (ReverseProxy
 // flushes through http.ResponseController) and Hijack for protocol
-// upgrades keep working through it. Only the request's own goroutine
-// writes to it, so its fields need no synchronisation.
+// upgrades keep working through it. Its fields need no lock of their own:
+// the request's goroutine writes them, and so does ReverseProxy's flush
+// timer (FlushInterval), but every flush and write goes through the
+// stdlib's maxLatencyWriter mutex, and the timer is stopped before the
+// handler reads the status.
 type recorder struct {
 	http.ResponseWriter
 	status int
