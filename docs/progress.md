@@ -260,7 +260,7 @@ All of these came from the independent review and were reproduced.
 - No reviewer report at the time; verification was done by the infra agent and the orchestrator. The Phase 8 static review then covered this phase and found 12 deploy findings, fixed in `ad6db96`.
 - Compose, verified for real: `docker compose up -d --build --wait` took 43.4 s including the Go builds, and 14.4 s warm (target: under 2 minutes). (Re-measured after the Phase 7 review fixes: 52.4 s cold, 17.2 s warm; 19 s warm on the final commit.) Requests spread over all three discovered demo instances. /api returned 401 without a key, 200 with a key, and 429 with Retry-After under a burst. A route change through the admin API took effect within 0.5 s, and rollback restored it. Stopping one demo container lost 0 of 20 requests. Prometheus targets were up, and the Grafana dashboard was listed.
 - kind, verified for real: kind was installed into a scratch directory and the cluster was deleted afterwards. All pods were ready in about 44 s. A rolling restart of the gateway under 150 requests returned 150 × 200.
-- Not verified: the GitHub Actions workflow has only been syntax-checked and has not run on GitHub.
+- Not verified at the time: the GitHub Actions workflow had only been syntax-checked. (Its first run on GitHub, after the repo was published, passed every job.)
 - Lint (resolved in Phase 8): the first lint count of 37 findings (34 in test files) was wrong. golangci-lint's defaults cap output at 50 findings per linter and 3 per identical message. With the caps removed the real count was about 120. Lint is now clean: 0 issues.
 
 ## Phase 8 — Prove it (2026-11-16)

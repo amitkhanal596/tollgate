@@ -7,9 +7,7 @@ This is the list the build could not finish on its own, or should not decide for
 | # | Item | What to do |
 |---|---|---|
 | 1 | **`internal/controlplane` is outside the layout in `CLAUDE.md`.** It was added so the admin API, store and SSE hub are testable and count toward the 80% coverage target. | Accept it, or update the layout line in `CLAUDE.md` so the rule and the repo agree. |
-| 2 | **The repo has never been pushed.** There is no remote. All commits are on `main` (the repo started empty in this session, so there was no branch to protect). | Create the GitHub repo and push when you are ready. Nothing was sent to any outside service. |
-| 3 | **CI has never run on GitHub.** `.github/workflows/ci.yml` was checked by reading it and by running the same commands locally (`make test`, `make cover`, `make lint`, `make bench-test`, image builds). The Postgres and Consul service containers in the `test` job have not been exercised by a real runner. | After pushing, watch the first run. Expect small fixes (action versions, service health timing). |
-| 4 | **Leftover benchmark files were not deleted.** `bench/results/raw/` (git-ignored, so it is never pushed) holds four superseded runs (`20261116T012935Z`, `013309Z`, `053626Z`, `054500Z`), the final run `20261116T162040Z`, and one empty directory `manual-20261116T114813Z`. Smoke output is in `bench/results/smoke/` (also git-ignored). A cleanup command from an agent was blocked by the permission system, and I did not run it on the agent's behalf. | Keep `bench/results/raw/20261116T162040Z` (the raw data behind `RESULTS.md`; only the six kill-case logs are committed, under `bench/results/evidence/`). Delete the rest if you want: `ls bench/results/raw` first, then remove the directories you do not need. |
+| 2 | **Leftover benchmark files were not deleted.** `bench/results/raw/` (git-ignored, so it is never pushed) holds four superseded runs (`20261116T012935Z`, `013309Z`, `053626Z`, `054500Z`), the final run `20261116T162040Z`, and one empty directory `manual-20261116T114813Z`. Smoke output is in `bench/results/smoke/` (also git-ignored). A cleanup command from an agent was blocked by the permission system, and I did not run it on the agent's behalf. | Keep `bench/results/raw/20261116T162040Z` (the raw data behind `RESULTS.md`; only the six kill-case logs are committed, under `bench/results/evidence/`). Delete the rest if you want: `ls bench/results/raw` first, then remove the directories you do not need. |
 
 ## 2. Benchmarks: re-run them on a quiet machine
 
@@ -53,7 +51,7 @@ Smaller things:
 
 ## 4. Verified locally, not elsewhere
 
-- **Postgres and Consul integration tests** run only when `TOLLGATE_TEST_DATABASE_URL` / `TOLLGATE_TEST_CONSUL_ADDR` are set. They were run against local Docker containers during the build. The final coverage figure (90.8% of `internal/`) was measured without them, so it is a lower bound.
+- **Postgres and Consul integration tests** run only when `TOLLGATE_TEST_DATABASE_URL` / `TOLLGATE_TEST_CONSUL_ADDR` are set. CI runs them against Postgres and Consul service containers; coverage of `internal/` there is 94.4% (90.8% locally without them). The first CI run passed every job: https://github.com/amitkhanal596/tollgate/actions/runs/43959895032.
 - **Kubernetes manifests** were applied once to a throwaway `kind` cluster (deleted afterwards) with a `kind` binary kept outside the repo. `kind`, `k6` and `golangci-lint` are not installed on this Mac; `k6` and `golangci-lint` run from pinned Docker images.
 - **`go.mod` says `go 1.26.9`** (raised by dependencies); the local toolchain is newer. PLAN.md asks for Go 1.23+, which holds, but a machine with exactly Go 1.23 cannot build it.
 - **The README quick-start commands** were run against the demo stack and behave as documented (`make up` took 19 s warm on the final commit).

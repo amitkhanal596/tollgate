@@ -184,7 +184,7 @@ A backend that keeps failing causes a user-visible failure about once per 10 s c
 
 ```sh
 make test         # go vet ./... and go test -race ./...
-make cover        # coverage for internal/; fails under 80%. Local run: 90.8% (no Postgres).
+make cover        # coverage for internal/; fails under 80%. 94.4% in CI (with Postgres), 90.8% locally without it.
 make lint         # golangci-lint v2.15.0 (local binary, or the Docker image). Local run: 0 issues.
 make bench-test   # unit tests for the benchmark analysis scripts (no Docker needed)
 ```
@@ -200,7 +200,7 @@ The Go version is set in `go.mod` (`go 1.26.9`).
 - `build`: builds both binaries.
 - `image`: builds the gateway, controlplane and demo images. It does not push.
 
-The repo has not been pushed yet, so this workflow has not run on GitHub.
+Every job passed on the first run on GitHub, with the Postgres and Consul integration tests running against the service containers.
 
 ## Deploy
 
