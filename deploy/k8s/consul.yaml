@@ -1,0 +1,39 @@
+# Single Consul dev agent (in-memory, no HA): demo only.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: consul
+  namespace: tollgate
+  labels: {app: consul}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: consul}
+  template:
+    metadata:
+      labels: {app: consul}
+    spec:
+      containers:
+        - name: consul
+          image: hashicorp/consul:1.20
+          args: [agent, -dev, -client=0.0.0.0, -ui]
+          ports: [{name: http, containerPort: 8500}]
+          readinessProbe:
+            httpGet: {path: /v1/status/leader, port: http}
+            periodSeconds: 3
+          livenessProbe:
+            httpGet: {path: /v1/status/leader, port: http}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {memory: 256Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: consul
+  namespace: tollgate
+spec:
+  selector: {app: consul}
+  ports: [{name: http, port: 8500, targetPort: http}]

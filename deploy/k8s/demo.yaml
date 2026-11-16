@@ -1,0 +1,147 @@
+# Three demo upstreams. Each pod registers itself in Consul under the service
+# name "demo"; the Services demo-N exist for the seed's static /static upstream.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-1
+  namespace: tollgate
+  labels: {app: demo-1}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: demo-1}
+  template:
+    metadata:
+      labels: {app: demo-1}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: demo
+          image: tollgate/demo:dev
+          imagePullPolicy: IfNotPresent
+          args: [-name=demo-1, -consul-addr=consul:8500, -service=demo]
+          ports: [{name: http, containerPort: 8080}]
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 3
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {memory: 64Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-1
+  namespace: tollgate
+spec:
+  selector: {app: demo-1}
+  ports: [{name: http, port: 8080, targetPort: http}]
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-2
+  namespace: tollgate
+  labels: {app: demo-2}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: demo-2}
+  template:
+    metadata:
+      labels: {app: demo-2}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: demo
+          image: tollgate/demo:dev
+          imagePullPolicy: IfNotPresent
+          args: [-name=demo-2, -consul-addr=consul:8500, -service=demo]
+          ports: [{name: http, containerPort: 8080}]
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 3
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {memory: 64Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-2
+  namespace: tollgate
+spec:
+  selector: {app: demo-2}
+  ports: [{name: http, port: 8080, targetPort: http}]
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-3
+  namespace: tollgate
+  labels: {app: demo-3}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: demo-3}
+  template:
+    metadata:
+      labels: {app: demo-3}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: demo
+          image: tollgate/demo:dev
+          imagePullPolicy: IfNotPresent
+          args: [-name=demo-3, -consul-addr=consul:8500, -service=demo]
+          ports: [{name: http, containerPort: 8080}]
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 3
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {memory: 64Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-3
+  namespace: tollgate
+spec:
+  selector: {app: demo-3}
+  ports: [{name: http, port: 8080, targetPort: http}]

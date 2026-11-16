@@ -1,0 +1,15 @@
+# Minimal golangci-lint v2 config: the default linters (errcheck, govet,
+# ineffassign, staticcheck, unused) plus a few cheap, high-signal extras.
+version: "2"
+run:
+  timeout: 5m
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - errorlint
+    - misspell
+    - unconvert
+formatters:
+  enable:
+    - gofmt

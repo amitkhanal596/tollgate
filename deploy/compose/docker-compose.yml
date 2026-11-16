@@ -1,0 +1,146 @@
+# Tollgate demo stack. From the repo root:
+#   docker compose -f deploy/compose/docker-compose.yml up -d --build --wait
+# or `make up`. Everything is published on 127.0.0.1 only.
+#
+# Healthchecks: gateway and controlplane are distroless (no shell, no curl),
+# so they cannot run a healthcheck command themselves. Instead the "ready"
+# service (the demo binary in -probe mode) is healthy only when the gateway's
+# /readyz and the control plane's /readyz both return 200, and `--wait`
+# waits for it. The gateway itself retries the control plane with backoff, so
+# it only needs depends_on: service_started.
+name: tollgate
+
+x-demo: &demo
+  build: { context: ../.., dockerfile: deploy/Dockerfile, target: demo }
+  image: tollgate/demo:dev
+  restart: unless-stopped
+  depends_on:
+    consul: { condition: service_healthy }
+  healthcheck:
+    test: ["CMD", "/demo", "-probe", "http://127.0.0.1:8080/healthz"]
+    interval: 2s
+    timeout: 3s
+    retries: 15
+    start_period: 2s
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    env_file: postgres.env
+    # No published port: the host already runs its own Postgres on 5432.
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tollgate -d tollgate"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  consul:
+    image: hashicorp/consul:1.20
+    command: ["agent", "-dev", "-client=0.0.0.0", "-ui"]
+    ports: ["127.0.0.1:8500:8500"]
+    healthcheck:
+      test: ["CMD-SHELL", "consul info | grep -q 'leader = true'"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  controlplane:
+    build: { context: ../.., dockerfile: deploy/Dockerfile, target: controlplane }
+    image: tollgate/controlplane:dev
+    restart: unless-stopped
+    command: ["-listen", ":9000", "-seed", "/etc/tollgate/seed.yaml"]
+    env_file: demo.env
+    volumes: ["./seed.yaml:/etc/tollgate/seed.yaml:ro"]
+    ports: ["127.0.0.1:9000:9000"]
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  gateway:
+    build: { context: ../.., dockerfile: deploy/Dockerfile, target: gateway }
+    image: tollgate/gateway:dev
+    restart: unless-stopped
+    command:
+      - -control-plane=http://controlplane:9000
+      - -consul-addr=consul:8500
+      - -lkg-path=/var/lib/tollgate/lkg.json
+      - -shutdown-delay=2s
+      - -node-id=gateway-compose
+    env_file: gateway.env
+    volumes: [lkg:/var/lib/tollgate]
+    ports:
+      - "127.0.0.1:8080:8080"   # client traffic
+      - "127.0.0.1:8081:9090"   # admin: /healthz /readyz /metrics
+    depends_on:
+      consul: { condition: service_healthy }
+      controlplane: { condition: service_started }
+
+  demo-1:
+    <<: *demo
+    command: ["-name", "demo-1", "-consul-addr", "consul:8500", "-service", "demo"]
+    hostname: demo-1
+  demo-2:
+    <<: *demo
+    command: ["-name", "demo-2", "-consul-addr", "consul:8500", "-service", "demo"]
+    hostname: demo-2
+  demo-3:
+    <<: *demo
+    command: ["-name", "demo-3", "-consul-addr", "consul:8500", "-service", "demo"]
+    hostname: demo-3
+
+  # Readiness gate for `up --wait`; serves nothing useful and does not register in Consul.
+  ready:
+    image: tollgate/demo:dev
+    command: ["-name", "ready"]
+    restart: unless-stopped
+    depends_on:
+      gateway: { condition: service_started }
+      controlplane: { condition: service_started }
+      demo-1: { condition: service_healthy }
+      demo-2: { condition: service_healthy }
+      demo-3: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "/demo", "-probe", "http://gateway:9090/readyz,http://controlplane:9000/readyz"]
+      interval: 2s
+      timeout: 4s
+      retries: 30
+
+  prometheus:
+    image: prom/prometheus:latest
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=2d
+    volumes: ["../prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+    ports: ["127.0.0.1:9091:9090"]
+    depends_on:
+      gateway: { condition: service_started }
+      controlplane: { condition: service_started }
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:9090/-/ready"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  grafana:
+    image: grafana/grafana:latest
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_DISABLE_LOGIN_FORM: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      - ../grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["127.0.0.1:3000:3000"]
+    depends_on:
+      prometheus: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3000/api/health"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  pgdata:
+  lkg:

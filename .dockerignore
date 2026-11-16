@@ -1,0 +1,11 @@
+.git
+.github
+.claude
+bench/results
+docs
+gateway
+*.md
+deploy/k8s
+deploy/compose
+deploy/grafana
+deploy/prometheus

@@ -1,0 +1,64 @@
+# Initial config stored by the control plane as version 1 (only if the store
+# is empty). After that the database is the source of truth: change config
+# through the admin API (see the Makefile `demo` target and the README).
+#
+# Demo API key (DEMO ONLY): demo-api-key-tollgate-0001
+# Only its sha256 is stored here:
+#   printf 'demo-api-key-tollgate-0001' | shasum -a 256
+defaults:
+  timeouts:
+    dial: 1s
+    response_header: 5s
+    request: 30s
+
+auth:
+  api_keys:
+    - client_id: demo-client
+      sha256: c5a19729c578c8130645801b6e25d02c557009c80d4606322c0962f3cc110249
+
+routes:
+  # Public route: every request not matched by a longer prefix.
+  - name: web
+    path_prefix: /
+    upstream: demo
+
+  # Authenticated and rate limited: 5 req/s sustained, bursts of 10, per client.
+  - name: api
+    path_prefix: /api
+    upstream: demo
+    auth: api_key
+    rate_limit:
+      requests_per_second: 5
+      burst: 10
+
+  # Static backends (no Consul), round robin.
+  - name: static
+    path_prefix: /static
+    upstream: demo-static
+
+upstreams:
+  # Backends come from Consul's passing instances of the "demo" service.
+  - name: demo
+    algorithm: least_conn
+    consul:
+      service: demo
+    health_check:
+      path: /healthz
+      interval: 2s
+      timeout: 1s
+      healthy_threshold: 2
+      unhealthy_threshold: 2
+    passive_health:
+      consecutive_failures: 3
+      cooloff: 10s
+
+  - name: demo-static
+    algorithm: round_robin
+    backends:
+      - http://demo-1:8080
+      - http://demo-2:8080
+      - http://demo-3:8080
+    health_check:
+      path: /healthz
+      interval: 2s
+      timeout: 1s

@@ -1,0 +1,52 @@
+# Demo Postgres: one replica with an emptyDir, so data is lost when the pod is
+# rescheduled. Use a StatefulSet with a PVC (or a managed database) for real use.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: tollgate
+  labels: {app: postgres}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: postgres}
+  template:
+    metadata:
+      labels: {app: postgres}
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports: [{name: pg, containerPort: 5432}]
+          env:
+            - {name: POSTGRES_USER, value: tollgate}
+            - {name: POSTGRES_DB, value: tollgate}
+            - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: tollgate-tokens, key: postgres-password}}
+          readinessProbe:
+            exec: {command: [pg_isready, -U, tollgate, -d, tollgate]}
+            periodSeconds: 3
+          livenessProbe:
+            exec: {command: [pg_isready, -U, tollgate, -d, tollgate]}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 256Mi}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+            - {name: run, mountPath: /var/run/postgresql}
+      volumes:
+        - {name: data, emptyDir: {}}
+        - {name: run, emptyDir: {}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: tollgate
+spec:
+  selector: {app: postgres}
+  ports: [{name: pg, port: 5432, targetPort: pg}]

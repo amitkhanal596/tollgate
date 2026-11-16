@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: controlplane
+  namespace: tollgate
+  labels: {app: controlplane}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: controlplane}
+  template:
+    metadata:
+      labels: {app: controlplane}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: {type: RuntimeDefault}
+      # The control plane exits 1 if Postgres is not reachable at startup, so
+      # wait for it here instead of crash-looping.
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:16-alpine
+          command: [sh, -c, "until pg_isready -h postgres -U tollgate -d tollgate; do sleep 1; done"]
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {memory: 64Mi}
+      containers:
+        - name: controlplane
+          image: tollgate/controlplane:dev
+          imagePullPolicy: IfNotPresent
+          args: ["-listen=:9000", "-seed=/etc/tollgate/seed.yaml"]
+          ports: [{name: http, containerPort: 9000}]
+          env:
+            - name: TOLLGATE_ADMIN_TOKEN
+              valueFrom: {secretKeyRef: {name: tollgate-tokens, key: admin-token}}
+            - name: TOLLGATE_DATAPLANE_TOKEN
+              valueFrom: {secretKeyRef: {name: tollgate-tokens, key: dataplane-token}}
+            - name: TOLLGATE_DATABASE_URL
+              valueFrom: {secretKeyRef: {name: tollgate-tokens, key: database-url}}
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 3
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 50m, memory: 32Mi}
+            limits: {memory: 128Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: seed, mountPath: /etc/tollgate, readOnly: true}
+      volumes:
+        - name: seed
+          configMap: {name: tollgate-seed}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: controlplane
+  namespace: tollgate
+spec:
+  selector: {app: controlplane}
+  ports: [{name: http, port: 9000, targetPort: http}]
