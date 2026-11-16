@@ -36,6 +36,7 @@ type Metrics struct {
 	configVer    prometheus.Gauge
 	applyFail    prometheus.Counter
 	streamUp     prometheus.Gauge
+	logDropped   prometheus.Counter
 
 	codes [600]string // status -> decimal string, built once so the hot path does not allocate
 }
@@ -57,7 +58,8 @@ func New(reg prometheus.Registerer) *Metrics {
 			Name: "tollgate_auth_failures_total", Help: "Requests rejected by authentication, by route and reason.",
 		}, []string{"route", "reason"}),
 		backendUp: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "tollgate_backend_up", Help: "1 if the backend is healthy and in rotation, else 0.",
+			Name: "tollgate_backend_up",
+			Help: "1 if the backend is in rotation (its active health check passes and it is not passively ejected), else 0.",
 		}, []string{"upstream", "backend"}),
 		inflight: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "tollgate_backend_inflight", Help: "Requests currently in flight to the backend.",
@@ -74,12 +76,16 @@ func New(reg prometheus.Registerer) *Metrics {
 		streamUp: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "tollgate_config_stream_connected", Help: "1 if the control-plane config stream is connected, else 0.",
 		}),
+		logDropped: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "tollgate_access_log_dropped_total",
+			Help: "Access-log lines dropped because the log sink could not keep up (the async buffer was full).",
+		}),
 	}
 	for i := 100; i < len(m.codes); i++ {
 		m.codes[i] = strconv.Itoa(i)
 	}
 	reg.MustRegister(m.requests, m.duration, m.rateLimited, m.authFailures, m.backendUp,
-		m.inflight, m.ejections, m.configVer, m.applyFail, m.streamUp)
+		m.inflight, m.ejections, m.configVer, m.applyFail, m.streamUp, m.logDropped)
 	return m
 }
 
@@ -90,20 +96,59 @@ func orNone(s string) string {
 	return s
 }
 
-// ObserveRequest records one completed request. Empty route/upstream become RouteNone.
+// ObserveRequest records one completed request: it counts it in
+// tollgate_requests_total and observes its latency. Empty route/upstream
+// become RouteNone.
 func (m *Metrics) ObserveRequest(route, upstream string, status int, d time.Duration) {
 	if m == nil {
 		return
 	}
 	route, upstream = orNone(route), orNone(upstream)
-	var code string
-	if status >= 100 && status < len(m.codes) {
-		code = m.codes[status]
-	} else {
-		code = strconv.Itoa(status) // out-of-range codes are rare; allocation is acceptable
-	}
-	m.requests.WithLabelValues(route, upstream, code).Inc()
+	m.requests.WithLabelValues(route, upstream, m.code(status)).Inc()
 	m.duration.WithLabelValues(route, upstream).Observe(d.Seconds())
+}
+
+// CountRequest counts one request in tollgate_requests_total WITHOUT
+// observing a latency. It is for upgraded connections (101 Switching
+// Protocols): their duration is how long a socket stayed open, not a request
+// latency, and would wreck the histogram's percentiles.
+func (m *Metrics) CountRequest(route, upstream string, status int) {
+	if m == nil {
+		return
+	}
+	m.requests.WithLabelValues(orNone(route), orNone(upstream), m.code(status)).Inc()
+}
+
+// code returns the label value for status without allocating for 100-599.
+func (m *Metrics) code(status int) string {
+	if status >= 100 && status < len(m.codes) {
+		return m.codes[status]
+	}
+	return strconv.Itoa(status) // out-of-range codes are rare; allocation is acceptable
+}
+
+// ForgetRoute deletes every series labelled route="<route>" from the four
+// route-labelled families (requests, duration, rate-limited, auth
+// failures). The gateway calls it for route names that a new config no
+// longer has, so renamed or removed routes do not leave dead series behind.
+// Unknown routes and "" are no-ops.
+func (m *Metrics) ForgetRoute(route string) {
+	if m == nil || route == "" {
+		return
+	}
+	l := prometheus.Labels{"route": route}
+	m.requests.DeletePartialMatch(l)
+	m.duration.DeletePartialMatch(l)
+	m.rateLimited.DeletePartialMatch(l)
+	m.authFailures.DeletePartialMatch(l)
+}
+
+// AccessLogDropped counts one access-log line dropped by the AsyncWriter.
+func (m *Metrics) AccessLogDropped() {
+	if m == nil {
+		return
+	}
+	m.logDropped.Inc()
 }
 
 // RateLimited counts a request rejected by the limiter.

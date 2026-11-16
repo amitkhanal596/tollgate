@@ -18,8 +18,10 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -27,6 +29,7 @@ import (
 
 	consulapi "github.com/hashicorp/consul/api"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 
 	"github.com/amitkhanal596/tollgate/internal/config"
 	"github.com/amitkhanal596/tollgate/internal/discovery"
@@ -41,6 +44,88 @@ const adminDrain = 2 * time.Second
 // It is read from the environment only, never from a flag (flags show up in
 // ps and in pod specs), and it is never logged.
 const envDataPlaneToken = "TOLLGATE_DATAPLANE_TOKEN"
+
+// accessLogLines is the access-log queue (metrics.AsyncWriter) in lines;
+// at a few hundred bytes a line it is a few MiB at most.
+const accessLogLines = 8192
+
+// accessLogFlush bounds how long shutdown waits for queued access-log
+// lines to reach a slow sink.
+const accessLogFlush = 2 * time.Second
+
+// maxNodeIDLen and validNodeID mirror the node ID rule of config.RemoteSource
+// and the control plane (architecture.md section 6.4), which keep it
+// unexported. Checked here only to tell "your hostname is not a usable
+// default" (exit 1) apart from "your -node-id is invalid" (exit 2);
+// NewRemoteSource still enforces the rule itself.
+const maxNodeIDLen = 128
+
+func validNodeID(s string) bool {
+	if len(s) == 0 || len(s) > maxNodeIDLen || s[0] == '.' || s[0] == '_' || s[0] == '-' {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '.' || c == '_' || c == '-') {
+			return false
+		}
+	}
+	return true
+}
+
+// redactURL returns raw with any userinfo replaced by "redacted", for logs.
+// It also handles strings url.Parse rejects, so not even a malformed URL
+// can leak a password into the logs.
+func redactURL(raw string) string {
+	if u, err := url.Parse(raw); err == nil {
+		if u.User == nil {
+			return raw
+		}
+		c := *u
+		c.User = url.User("redacted")
+		return c.String()
+	}
+	// Unparseable: cut everything between "://" and the last "@" of the
+	// authority.
+	rest, scheme := raw, ""
+	if i := strings.Index(raw, "://"); i >= 0 {
+		scheme, rest = raw[:i+3], raw[i+3:]
+	}
+	authority := rest
+	if i := strings.IndexAny(rest, "/?#"); i >= 0 {
+		authority = rest[:i]
+	}
+	if at := strings.LastIndex(authority, "@"); at >= 0 {
+		return scheme + "redacted@" + rest[at+1:]
+	}
+	return raw
+}
+
+// hasUserinfo reports whether raw carries credentials (or looks like it
+// does: an unparseable URL with an "@" in its authority counts).
+func hasUserinfo(raw string) bool {
+	if u, err := url.Parse(raw); err == nil {
+		return u.User != nil
+	}
+	return redactURL(raw) != raw
+}
+
+// lockedWriter serializes Writes to w. The application logger and the
+// access log's drain goroutine both write to the same sink; before the
+// access log went asynchronous one slog handler (and its mutex) served
+// both, and this keeps their lines from interleaving on any io.Writer. Not
+// on the request path: only the drain goroutine and application logs take
+// it.
+type lockedWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (l *lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
+}
 
 // streamGaugeInterval is how often tollgate_config_stream_connected is
 // refreshed from RemoteSource.Connected, which has no change hook.
@@ -103,7 +188,7 @@ func runGateway(ctx context.Context, args []string, logOut io.Writer, getenv fun
 	fs.SetOutput(logOut)
 	cfgPath := fs.String("config", "", "path to the gateway YAML config (standalone mode; exactly one of -config and -control-plane)")
 	cpURL := fs.String("control-plane", "", "base URL of the control plane, e.g. http://controlplane:9000 (needs $"+envDataPlaneToken+")")
-	nodeID := fs.String("node-id", "", "this gateway's ID at the control plane (default: the hostname)")
+	nodeID := fs.String("node-id", "", "this gateway's ID at the control plane (default: $HOSTNAME, else the hostname)")
 	lkgPath := fs.String("lkg-path", "", "file holding the last applied config, served at startup if the control plane is down (\"\" = off)")
 	consulAddr := fs.String("consul-addr", "", "host:port of the local Consul agent; enables consul upstreams")
 	accessLog := fs.Bool("access-log", true, "write one JSON line per request")
@@ -120,7 +205,8 @@ func runGateway(ctx context.Context, args []string, logOut io.Writer, getenv fun
 		return 2
 	}
 
-	logger := slog.New(slog.NewJSONHandler(logOut, nil))
+	sink := &lockedWriter{w: logOut}
+	logger := slog.New(slog.NewJSONHandler(sink, nil))
 	switch {
 	case (*cfgPath == "") == (*cpURL == ""):
 		logger.Error("exactly one of -config and -control-plane is required")
@@ -144,6 +230,14 @@ func runGateway(ctx context.Context, args []string, logOut io.Writer, getenv fun
 		idle []*http.Transport
 	)
 	if *cpURL != "" {
+		// Credentials belong in $TOLLGATE_DATAPLANE_TOKEN, never in a flag
+		// (visible in ps and pod specs) or a URL (which ends up in logs and
+		// error messages). Reject them rather than silently strip them.
+		if hasUserinfo(*cpURL) {
+			logger.Error("-control-plane must not contain credentials (user:password@); the data-plane token is read from $"+envDataPlaneToken,
+				"control_plane", redactURL(*cpURL))
+			return 2
+		}
 		token := getenv(envDataPlaneToken)
 		if token == "" {
 			logger.Error("-control-plane requires the " + envDataPlaneToken + " environment variable")
@@ -151,10 +245,22 @@ func runGateway(ctx context.Context, args []string, logOut io.Writer, getenv fun
 		}
 		id := *nodeID
 		if id == "" {
-			host, err := os.Hostname()
-			if err != nil {
-				logger.Error("cannot determine the hostname for -node-id; set -node-id", "err", err)
-				return 2
+			// $HOSTNAME first: it is the pod name in Kubernetes and goes
+			// through getenv, so tests can set it.
+			host := getenv("HOSTNAME")
+			if host == "" {
+				var err error
+				if host, err = os.Hostname(); err != nil {
+					logger.Error("cannot determine the hostname for the default node ID; pass -node-id", "err", err)
+					return 1
+				}
+			}
+			// The operator did not type this value, so it is an environment
+			// problem (exit 1), not a flag error (exit 2).
+			if !validNodeID(host) {
+				logger.Error("the hostname is not a valid node ID (1-128 bytes of [A-Za-z0-9._-], starting with a letter or digit); pass -node-id",
+					"hostname", host)
+				return 1
 			}
 			id = host
 		}
@@ -211,24 +317,49 @@ func runGateway(ctx context.Context, args []string, logOut io.Writer, getenv fun
 	// A private registry, never prometheus.DefaultRegisterer: no global
 	// state, and runGateway can run several times in one test binary.
 	reg := prometheus.NewRegistry()
+	reg.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	m := metrics.New(reg)
 	opts := proxy.Options{Logger: logger, Getenv: getenv, Metrics: m, Resolver: resolver}
+	var accessOut *metrics.AsyncWriter
 	if *accessLog {
-		// Same handler as the logs: one JSON stream, lines told apart by
-		// msg "request". The benchmark turns it off with -access-log=false.
-		opts.AccessLogger = logger
+		// Same sink and format as the logs: one JSON stream, lines told
+		// apart by msg "request". The benchmark turns it off with
+		// -access-log=false.
+		//
+		// The tradeoff: the access log goes through a bounded queue drained
+		// by one goroutine, so when stdout blocks (a stuck log collector, a
+		// full pipe) the gateway keeps serving and DROPS access-log lines,
+		// counted in tollgate_access_log_dropped_total, instead of stalling
+		// every request on a write. Application logs stay synchronous: they
+		// are rare, and losing one silently would hide the problem.
+		accessOut = metrics.NewAsyncWriter(sink, accessLogLines, m.AccessLogDropped)
+		opts.AccessLogger = slog.New(slog.NewJSONHandler(accessOut, nil))
+	}
+	// closeAccessLog flushes and stops the access-log writer. Idempotent
+	// (AsyncWriter.Close is), and a no-op with -access-log=false.
+	closeAccessLog := func() {
+		if accessOut == nil {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), accessLogFlush)
+		defer cancel()
+		if err := accessOut.Close(ctx); err != nil {
+			logger.Warn("access log not fully flushed: the log sink is not accepting writes", "err", err)
+		}
 	}
 
 	// Bind both listeners before starting anything, so a port clash fails
 	// fast with nothing to clean up.
 	trafficLn, err := net.Listen("tcp", *listen)
 	if err != nil {
+		closeAccessLog()
 		logger.Error("listen failed", "addr", *listen, "err", err)
 		return 1
 	}
 	adminLn, err := net.Listen("tcp", *adminListen)
 	if err != nil {
 		_ = trafficLn.Close()
+		closeAccessLog()
 		logger.Error("listen failed", "addr", *adminListen, "err", err)
 		return 1
 	}
@@ -301,7 +432,7 @@ func runGateway(ctx context.Context, args []string, logOut io.Writer, getenv fun
 	})
 	if remote != nil {
 		logger.Info("gateway started", "listen", trafficLn.Addr().String(),
-			"admin_listen", adminLn.Addr().String(), "control_plane", *cpURL, "node_id", *nodeID,
+			"admin_listen", adminLn.Addr().String(), "control_plane", redactURL(*cpURL), "node_id", *nodeID,
 			"lkg_path", *lkgPath, "consul_addr", *consulAddr, "access_log", *accessLog)
 	} else {
 		logger.Info("gateway started", "listen", trafficLn.Addr().String(),
@@ -349,6 +480,10 @@ func runGateway(ctx context.Context, args []string, logOut io.Writer, getenv fun
 	//      discovery watches) and the gauge sampler, and wait for them.
 	stopBackground()
 	background.Wait()
+	// Traffic has drained, so no more access-log lines are coming (a
+	// still-open upgraded connection that finishes later is dropped, not a
+	// panic). Bounded: a stuck sink cannot hold up the exit.
+	closeAccessLog()
 
 	// All senders have exited; collect anything else they reported.
 	close(errc)

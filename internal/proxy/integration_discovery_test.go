@@ -92,14 +92,17 @@ func igHold(t *testing.T, base string, b *ctrlBackend) <-chan igResult {
 	return nil
 }
 
-// Before the first endpoint set: ready (the config is applied), but the
-// route has no backends, so 503.
+// Before the first endpoint set: the config is applied (Version set) but the
+// gateway is not ready yet, and the route has no backends, so 503.
 func TestDiscoveryBeforeFirstEndpointSet(t *testing.T) {
 	res := &igResolver{closeOnCancel: true}
 	h, srv := startDisc(t, Options{}, res, discCfg(1, discUp("users", "users", "", "http")))
 
-	if !h.g.Ready() || h.g.Version() != 1 {
-		t.Fatalf("Ready=%v Version=%d, want ready at version 1", h.g.Ready(), h.g.Version())
+	// Fix round 5 (D1, ADR 0007 Startup): the config is applied, but the
+	// gateway is NOT ready until the service has answered once (or the
+	// discovery-ready timeout passes).
+	if h.g.Ready() || h.g.Version() != 1 {
+		t.Fatalf("Ready=%v Version=%d, want not ready at version 1", h.g.Ready(), h.g.Version())
 	}
 	w := res.waitWatches(t, 1)
 	if want := (discovery.Query{Service: "users", Tag: ""}); w.q != want {

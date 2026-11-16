@@ -24,6 +24,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 
 	"github.com/amitkhanal596/tollgate/internal/config"
 	"github.com/amitkhanal596/tollgate/internal/controlplane"
@@ -164,6 +165,7 @@ func run(ctx context.Context, args []string, logOut io.Writer, getenv func(strin
 
 	// Private registry, never the default one: no global state.
 	reg := prometheus.NewRegistry()
+	reg.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	cpm := metrics.NewControlPlane(reg)
 
 	handler, err := controlplane.NewHandler(controlplane.Options{

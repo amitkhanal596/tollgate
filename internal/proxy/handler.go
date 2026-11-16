@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -180,7 +181,12 @@ func (g *Gateway) record(ex *exchange, r *http.Request) {
 	d := time.Since(ex.start)
 	st := &ex.st
 	status := ex.rec.status
-	if status == 0 {
+	switch {
+	case status == 0 && ex.rec.hijacked:
+		// An upgraded connection: ReverseProxy wrote the backend's 101 to
+		// the hijacked connection itself, never through WriteHeader.
+		status = http.StatusSwitchingProtocols
+	case status == 0:
 		// Nothing was written: net/http answers an empty 200 on a normal
 		// return (on a panic the connection is cut, but there is no better
 		// code to report for a response that never started).
@@ -188,7 +194,14 @@ func (g *Gateway) record(ex *exchange, r *http.Request) {
 	}
 	// Names only (never paths, queries or client IDs): bounded cardinality.
 	// An unmatched request has empty names, which metrics maps to "none".
-	g.metrics.ObserveRequest(st.route, st.upstream, status, d)
+	if ex.rec.hijacked {
+		// Counted, but kept out of the latency histogram: d is how long the
+		// upgraded socket stayed open (minutes for a websocket), not how
+		// long a request took, and would wreck the percentiles.
+		g.metrics.CountRequest(st.route, st.upstream, status)
+	} else {
+		g.metrics.ObserveRequest(st.route, st.upstream, status, d)
+	}
 	if g.accessLog == nil {
 		return
 	}
@@ -228,6 +241,9 @@ type recorder struct {
 	http.ResponseWriter
 	status int
 	bytes  int64
+	// hijacked is set when ReverseProxy takes over the connection, which it
+	// does only to relay a protocol upgrade after the backend's 101.
+	hijacked bool
 }
 
 func (rw *recorder) WriteHeader(code int) {
@@ -260,8 +276,22 @@ func (rw *recorder) FlushError() error {
 // Flush implements http.Flusher for callers that type-assert it.
 func (rw *recorder) Flush() { _ = rw.FlushError() }
 
+// Hijack is what http.ResponseController.Hijack calls first (before
+// Unwrap). It is the only reliable sign of an upgraded connection: after a
+// 101 from the backend, ReverseProxy hijacks the client connection and
+// writes the 101 there itself, so WriteHeader(101) is never called. Errors
+// (including http.ErrNotSupported) pass through unchanged, so ReverseProxy
+// still reports a writer that cannot hijack.
+func (rw *recorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	conn, brw, err := http.NewResponseController(rw.ResponseWriter).Hijack()
+	if err == nil {
+		rw.hijacked = true
+	}
+	return conn, brw, err
+}
+
 // Unwrap lets http.ResponseController reach the underlying writer
-// (Hijack, SetReadDeadline, ...).
+// (SetReadDeadline, ...).
 func (rw *recorder) Unwrap() http.ResponseWriter { return rw.ResponseWriter }
 
 // proxyState is what the shared per-route ReverseProxy hooks need to know

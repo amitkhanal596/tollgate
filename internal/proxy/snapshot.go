@@ -6,7 +6,6 @@ import (
 	"log"
 	"log/slog"
 	"math"
-	"net"
 	"net/http/httputil"
 	"net/url"
 	"strings"
@@ -48,6 +47,11 @@ type Snapshot struct {
 	// healthTargets is one active-probe target per backend of every
 	// upstream with a health_check, handed to Checker.Sync after the swap.
 	healthTargets []health.Target
+
+	// authns are the authenticators the routes use. An endpoint-triggered
+	// rebuild (same config) reuses them instead of reading key files and
+	// secret env vars again (fix round 5, D5).
+	authns authenticators
 }
 
 // routeRT is the runtime form of one config.Route.
@@ -120,9 +124,23 @@ type builder struct {
 	discovery bool
 }
 
-// endpointLookup returns the latest endpoint set for a discovery query, or
-// nil if none has arrived yet. A nil lookup means no sets at all.
-type endpointLookup func(discovery.Query) []discovery.Endpoint
+// buildInput is everything a build reads besides the config.
+type buildInput struct {
+	// endpoints returns the latest (validated) endpoint set of q and
+	// whether q has answered at all; an empty answered set is "Consul says
+	// zero instances". nil means no sets at all.
+	endpoints func(q discovery.Query) (eps []discovery.Endpoint, answered bool)
+	// prev is the live snapshot (nil before the first one). A consul
+	// upstream whose query has not answered yet keeps prev's backend set
+	// for the upstream of the same name (fix round 5, D2).
+	prev *Snapshot
+	// reuseAuth takes prev's authenticators instead of constructing new
+	// ones. Set for endpoint-triggered rebuilds, so they neither re-read
+	// files and env vars on every Consul change nor fail because one of
+	// them has disappeared since the config was applied (D5). Honoured only
+	// if prev was built from the very same *Config.
+	reuseAuth bool
+}
 
 // consulQuery is the discovery watch key of a consul upstream. Upstreams
 // that differ only in scheme share it, and so share one watch.
@@ -136,16 +154,19 @@ func consulQuery(c *config.ConsulService) discovery.Query {
 // means a rejected config never leaves half-registered Backends or orphan
 // transports behind.
 //
-// eps supplies the endpoint sets of consul upstreams (ADR 0007: the config
-// says what, Consul says where). An upstream whose set has not arrived yet,
-// or is empty, gets no backends, so its routes answer 503.
-func (bd *builder) build(cfg *config.Config, eps endpointLookup) (*Snapshot, error) {
+// in supplies the endpoint sets of consul upstreams (ADR 0007: the config
+// says what, Consul says where). An upstream whose query has answered gets
+// exactly that set (an empty one means no backends, so 503); one whose query
+// has not answered yet keeps its previous backends, if it had any.
+func (bd *builder) build(cfg *config.Config, in buildInput) (*Snapshot, error) {
 	urls, err := checkConfig(cfg)
 	if err != nil {
 		return nil, err
 	}
-	authns, err := bd.buildAuthenticators(cfg)
-	if err != nil {
+	var authns authenticators
+	if in.reuseAuth && in.prev != nil && in.prev.Config == cfg {
+		authns = in.prev.authns
+	} else if authns, err = bd.buildAuthenticators(cfg); err != nil {
 		// A route whose authenticator cannot be built would have to either
 		// fail open or reject everything; rejecting the whole config keeps
 		// the old snapshot (and its working auth) serving instead.
@@ -158,12 +179,13 @@ func (bd *builder) build(cfg *config.Config, eps endpointLookup) (*Snapshot, err
 		upstreams:     make(map[string]*upstreamRT, len(cfg.Upstreams)),
 		backendIDs:    make(map[string]struct{}),
 		transportKeys: make(map[transportKey]struct{}),
+		authns:        authns,
 	}
 
 	for _, u := range cfg.Upstreams {
 		baseURLs := urls[u.Name]
 		if u.Consul != nil {
-			baseURLs = bd.discoveredURLs(u, eps)
+			baseURLs = bd.discoveredURLs(u, in)
 		}
 		backends := make([]*balancer.Backend, 0, len(baseURLs))
 		seen := make(map[string]struct{}, len(baseURLs))
@@ -232,33 +254,48 @@ func (bd *builder) build(cfg *config.Config, eps endpointLookup) (*Snapshot, err
 	return s, nil
 }
 
-// discoveredURLs turns the latest endpoint set of a consul upstream into
-// backend base URLs: the block's scheme (default http) plus each endpoint's
-// "host:port". Duplicate addresses are dropped by the caller (same Registry
-// ID). It never fails: a malformed address is skipped, because one bad
-// Consul registration must not reject the whole config.
-func (bd *builder) discoveredURLs(u config.Upstream, eps endpointLookup) []*url.URL {
+// discoveredURLs turns the endpoint set of a consul upstream into backend
+// base URLs: the block's scheme (default http) plus each endpoint's
+// "host:port". The reconciler has already dropped endpoints with invalid
+// addresses (discovered.go); duplicate addresses are dropped by the caller
+// (same Registry ID). It never fails.
+func (bd *builder) discoveredURLs(u config.Upstream, in buildInput) []*url.URL {
 	if !bd.discovery {
 		bd.logger.Warn("upstream uses consul but no discovery resolver is configured (-consul-addr); it has no backends",
 			"upstream", u.Name, "service", u.Consul.Service)
 		return nil
 	}
-	if eps == nil {
+	if in.endpoints != nil {
+		if set, answered := in.endpoints(consulQuery(u.Consul)); answered {
+			scheme := u.Consul.Scheme
+			if scheme == "" {
+				scheme = "http"
+			}
+			out := make([]*url.URL, 0, len(set))
+			for _, ep := range set {
+				out = append(out, &url.URL{Scheme: scheme, Host: ep.Address})
+			}
+			return out
+		}
+	}
+	// Not answered yet (a new service or tag, or a static upstream switched
+	// to consul): keep serving what this upstream had, rather than opening
+	// a 503 window until the new watch answers. Same upstream name, same
+	// URLs, so the Registry hands back the same *Backends with their state.
+	// The new watch's first answer, even an empty one, replaces it.
+	return carriedOverURLs(in.prev, u.Name)
+}
+
+// carriedOverURLs returns the backend URLs upstream had in prev (nil if
+// prev is nil or had no such upstream).
+func carriedOverURLs(prev *Snapshot, upstream string) []*url.URL {
+	if prev == nil || prev.upstreams[upstream] == nil {
 		return nil
 	}
-	scheme := u.Consul.Scheme
-	if scheme == "" {
-		scheme = "http"
-	}
-	set := eps(consulQuery(u.Consul))
-	out := make([]*url.URL, 0, len(set))
-	for _, ep := range set {
-		if host, _, err := net.SplitHostPort(ep.Address); err != nil || host == "" {
-			bd.logger.Warn("skipping discovered endpoint with an invalid address",
-				"upstream", u.Name, "endpoint", ep.ID, "address", ep.Address)
-			continue
-		}
-		out = append(out, &url.URL{Scheme: scheme, Host: ep.Address})
+	backends := prev.upstreams[upstream].backends
+	out := make([]*url.URL, 0, len(backends))
+	for _, b := range backends {
+		out = append(out, b.URL) // Registry.Get only reads it (and copies on create)
 	}
 	return out
 }

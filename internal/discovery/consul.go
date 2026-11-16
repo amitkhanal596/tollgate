@@ -21,6 +21,7 @@ const (
 	defaultBackoffMin  = 500 * time.Millisecond
 	defaultBackoffMax  = 30 * time.Second
 	defaultMinInterval = time.Second
+	defaultQueryMargin = 5 * time.Second
 )
 
 // ConsulOptions configures NewConsul. Zero values select defaults.
@@ -35,6 +36,10 @@ type ConsulOptions struct {
 	// long blocking wait is never followed by an extra pause. It is not an
 	// error backoff.
 	MinInterval time.Duration
+	// QueryMargin is how much longer than WaitTime (plus WaitTime/16, the
+	// jitter Consul adds to a blocking query) one query may take before the
+	// watcher abandons it as hung and counts it as an error (0 -> 5s).
+	QueryMargin time.Duration
 	// Sleep, if non-nil, is used for error backoff and the MinInterval
 	// throttle. nil -> real timer honoring ctx.
 	Sleep func(ctx context.Context, d time.Duration) error
@@ -67,6 +72,9 @@ func NewConsul(client *consulapi.Client, opts ConsulOptions) *Consul {
 	}
 	if opts.MinInterval <= 0 {
 		opts.MinInterval = defaultMinInterval
+	}
+	if opts.QueryMargin <= 0 {
+		opts.QueryMargin = defaultQueryMargin
 	}
 	if opts.Sleep == nil {
 		opts.Sleep = sleepCtx
@@ -114,12 +122,13 @@ func (c *Consul) run(ctx context.Context, q Query, ch chan []Endpoint) {
 
 	for ctx.Err() == nil {
 		start := time.Now()
-		qo := (&consulapi.QueryOptions{WaitIndex: idx, WaitTime: c.opts.WaitTime}).WithContext(ctx)
-		entries, meta, err := c.client.Health().Service(q.Service, q.Tag, true, qo)
+		entries, meta, err := c.query(ctx, q, idx)
 		if ctx.Err() != nil {
 			return // canceled: the error (if any) is just the abort
 		}
 		if err != nil {
+			// Includes a query abandoned at its own deadline (a hung agent):
+			// it backs off and retries like any other failure.
 			// Never send anything on error: the consumer keeps the last set.
 			log.Warn("consul query failed", "err", fmt.Errorf("health service %q: %w", q.Service, err))
 			backoff = nextBackoff(backoff, c.opts.BackoffMin, c.opts.BackoffMax)
@@ -152,6 +161,23 @@ func (c *Consul) run(ctx context.Context, q Query, ch chan []Endpoint) {
 			}
 		}
 	}
+}
+
+// query runs one blocking query with its own deadline, so an agent that
+// accepts the connection and then never answers cannot stall the watch
+// forever (the HTTP client has no timeout: it must allow the long wait).
+//
+// The deadline is WaitTime + WaitTime/16 + QueryMargin: Consul adds a random
+// jitter of up to WaitTime/16 to every blocking wait (to spread out the
+// wake-ups of many watchers), so a healthy agent may legitimately answer
+// that much later than WaitTime; QueryMargin covers the network and the
+// agent's own processing on top.
+func (c *Consul) query(ctx context.Context, q Query, idx uint64) ([]*consulapi.ServiceEntry, *consulapi.QueryMeta, error) {
+	wait := c.opts.WaitTime
+	qctx, cancel := context.WithTimeout(ctx, wait+wait/16+c.opts.QueryMargin)
+	defer cancel()
+	qo := (&consulapi.QueryOptions{WaitIndex: idx, WaitTime: wait}).WithContext(qctx)
+	return c.client.Health().Service(q.Service, q.Tag, true, qo)
 }
 
 // nextIndex applies ADR 0007's index rules to the returned X-Consul-Index.
