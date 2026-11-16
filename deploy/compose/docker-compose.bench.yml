@@ -10,10 +10,23 @@
 #     script restarts it (the demo stack's unless-stopped would race the script).
 #   - prometheus and grafana only start with `--profile monitoring`, so they
 #     do not steal CPU during a measurement.
-# Nothing extra is published: k6 runs on the compose network, and fault
-# injection (/admin/fail on a demo instance) happens from inside that network.
+# Nothing is published to the host (the demo stack's ports are removed here):
+# k6 runs on the compose network, and fault injection (/admin/fail on a demo
+# instance) and control-plane calls happen from inside that network.
+#
+# CPU isolation: bench/lib.sh reads the Docker VM's CPU count and exports
+# BENCH_CPUSET_GW (gateway), BENCH_CPUSET_REST (demos, control plane, Postgres,
+# Consul) and BENCH_GOMAXPROCS_REST; k6 gets its own set via `docker run
+# --cpuset-cpus`. The three sets do not overlap, so the load generator, the
+# gateway and the backends cannot steal each other's CPU. Empty values (the
+# default when this file is used without bench/lib.sh) mean no pinning.
+#
+# Run it only with the project name `tollgate-bench` (bench/lib.sh passes -p):
+# `down -v` then cannot touch the demo stack's volumes.
 services:
   gateway:
+    cpuset: "${BENCH_CPUSET_GW:-}"
+    ports: !override []   # k6 and the scripts use the compose network; nothing is published
     command:
       - -control-plane=http://controlplane:9000
       - -consul-addr=consul:8500
@@ -24,10 +37,23 @@ services:
 
   controlplane:
     volumes: ["./bench.yaml:/etc/tollgate/seed.yaml:ro"]
+    cpuset: "${BENCH_CPUSET_REST:-}"
+    ports: !override []
 
-  demo-1: { restart: "no", command: ["-name", "demo-1", "-consul-addr", "consul:8500", "-service", "demo", "-fault-injection"] }
-  demo-2: { restart: "no", command: ["-name", "demo-2", "-consul-addr", "consul:8500", "-service", "demo", "-fault-injection"] }
-  demo-3: { restart: "no", command: ["-name", "demo-3", "-consul-addr", "consul:8500", "-service", "demo", "-fault-injection"] }
+  # Everything that is not the gateway, the load generator or a demo backend
+  # shares the "rest" CPUs with the demo backends (they are idle during runs).
+  consul:
+    cpuset: "${BENCH_CPUSET_REST:-}"
+    ports: !override []
+  postgres: { cpuset: "${BENCH_CPUSET_REST:-}" }
+  ready: { cpuset: "${BENCH_CPUSET_REST:-}" }
+
+  demo-1: { restart: "no", command: ["-name", "demo-1", "-consul-addr", "consul:8500", "-service", "demo", "-fault-injection"],
+    cpuset: "${BENCH_CPUSET_REST:-}", environment: { GOMAXPROCS: "${BENCH_GOMAXPROCS_REST:-}" } }
+  demo-2: { restart: "no", command: ["-name", "demo-2", "-consul-addr", "consul:8500", "-service", "demo", "-fault-injection"],
+    cpuset: "${BENCH_CPUSET_REST:-}", environment: { GOMAXPROCS: "${BENCH_GOMAXPROCS_REST:-}" } }
+  demo-3: { restart: "no", command: ["-name", "demo-3", "-consul-addr", "consul:8500", "-service", "demo", "-fault-injection"],
+    cpuset: "${BENCH_CPUSET_REST:-}", environment: { GOMAXPROCS: "${BENCH_GOMAXPROCS_REST:-}" } }
 
   prometheus: { profiles: ["monitoring"] }
   grafana: { profiles: ["monitoring"] }

@@ -3,7 +3,6 @@ COMPOSE   := docker compose -f deploy/compose/docker-compose.yml
 COVER_MIN := 80
 # Keep identical to the golangci-lint version pinned in .github/workflows/ci.yml.
 GOLANGCI_LINT_VERSION := v2.15.0
-BENCH_COMPOSE := docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.bench.yml
 DEMO_KEY  := demo-api-key-tollgate-0001
 ADMIN_TOK := DEMO-ONLY-admin-token-0123456789abcdef-change-me
 
@@ -56,17 +55,17 @@ demo: ## a few requests showing routing, auth and rate limiting
 	curl -s -H 'Authorization: Bearer $(ADMIN_TOK)' 127.0.0.1:9000/v1/dataplanes; echo
 	@echo "Grafana http://127.0.0.1:3000  Prometheus http://127.0.0.1:9091  Consul http://127.0.0.1:8500"
 
-bench-up: ## start the benchmark stack (access log off) and wait until it works
-	$(BENCH_COMPOSE) up -d --build --wait
+bench-up: ## start the benchmark stack (project tollgate-bench, access log off) and wait until it works
+	bench/stack.sh up
 
-bench-down: ## stop the benchmark stack and delete its volumes
-	$(BENCH_COMPOSE) down -v --remove-orphans
+bench-down: ## stop the benchmark stack and delete ITS volumes (the demo stack is untouched)
+	bench/stack.sh down
 
-bench: ## overhead, max RPS and limiter accuracy (~15 min); results in bench/results/
+bench: ## overhead + noise floor, max RPS x3, limiter (~26 min); results in bench/results/
 	bench/run-all.sh bench
 
-chaos: ## failover and hot-reload chaos tests (~9 min); results in bench/results/
+chaos: ## hot reload and failover, 6 cases x 3 runs (~18 min); results in bench/results/
 	bench/run-all.sh chaos
 
-bench-all: ## bench + chaos (~25 min)
+bench-all: ## bench + chaos (~45 min); SMOKE=1 make bench-all for a ~5 min smoke run
 	bench/run-all.sh all

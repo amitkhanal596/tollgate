@@ -62,6 +62,12 @@ routes:
     path_prefix: /flip
     upstream: flip-a
 
+  # Hot reload test, in-flight part: demo-3 is put in "slow" mode (2 s per response)
+  # for the test, and the script flips this route between slow-a and slow-b (both demo-3).
+  - name: hrslow
+    path_prefix: /hrslow
+    upstream: slow-a
+
   # Failover test, three configurations of the same three instances.
   - name: fo-passive
     path_prefix: /fo-passive
@@ -86,6 +92,10 @@ upstreams:
     backends: [http://demo-1:8080]
   - name: flip-b
     backends: [http://demo-2:8080]
+  - name: slow-a
+    backends: [http://demo-3:8080]
+  - name: slow-b
+    backends: [http://demo-3:8080]
 
   # Passive health only: the gateway learns a backend is dead from failed requests.
   - name: fo-passive
