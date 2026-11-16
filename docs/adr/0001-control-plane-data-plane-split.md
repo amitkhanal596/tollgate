@@ -31,7 +31,7 @@ Option 3.
 | Postgres: append-only table of full config versions | Active and passive health checking |
 | Validation at write time (shared `internal/config`) | Consul watcher (ADR 0007) |
 | SSE stream endpoint `/v1/config/stream` | `ConfigSource` client (file or SSE), atomic snapshot swap (ADR 0002) |
-| | `/metrics`, `/healthz`, `/readyz`, served only on the separate admin listener (`-admin-listen`), never on the traffic port |
+| | `/metrics`, `/healthz`, `/readyz` (and, with the debug-only `-pprof` flag, `/debug/pprof/`), served only on the separate admin listener (`-admin-listen`), never on the traffic port |
 
 Both binaries use the same `internal/config` structs and the same `Validate`, so "valid" means exactly the same thing on both sides.
 
