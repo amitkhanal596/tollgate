@@ -37,6 +37,10 @@ const dbStartupTimeout = 10 * time.Second
 // planesPollInterval is how often the connected-data-planes gauge is refreshed.
 const planesPollInterval = 250 * time.Millisecond
 
+// headPollTimeout bounds each head-poller store read, so a hung database
+// cannot stall the poller past shutdown (its context is also canceled then).
+const headPollTimeout = 5 * time.Second
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	// Restore default signal handling after the first signal so a second
@@ -61,6 +65,8 @@ func run(ctx context.Context, args []string, logOut io.Writer, getenv func(strin
 	seed := fs.String("seed", "", "YAML config to store as version 1 if the store is empty")
 	drain := fs.Duration("drain-timeout", 10*time.Second, "how long open requests may take to finish on shutdown")
 	heartbeat := fs.Duration("heartbeat", controlplane.DefaultHeartbeat, "config stream heartbeat interval")
+	readTimeout := fs.Duration("read-timeout", 30*time.Second, "maximum time to read a whole request, body included (does not cut config streams)")
+	headPoll := fs.Duration("head-poll", 2*time.Second, "how often to publish a store head newer than this replica has seen (0 disables)")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -92,6 +98,20 @@ func run(ctx context.Context, args []string, logOut io.Writer, getenv func(strin
 	case *heartbeat <= 0:
 		logger.Error("-heartbeat must be positive", "heartbeat", heartbeat.String())
 		return 2
+	case *readTimeout <= 0:
+		logger.Error("-read-timeout must be positive", "read_timeout", readTimeout.String())
+		return 2
+	case *headPoll < 0:
+		logger.Error("-head-poll must not be negative (0 disables it)", "head_poll", headPoll.String())
+		return 2
+	}
+	// Shutdown ends streams by closing the hub, but a handler blocked in a
+	// write to a peer that stopped reading only returns when its write
+	// deadline passes. With a drain no longer than that, one stuck stream
+	// turns every shutdown into a drain timeout (exit code 1).
+	if *drain <= controlplane.DefaultStreamWriteTimeout {
+		logger.Warn("-drain-timeout is not above the stream write timeout; a stuck config stream can make the drain time out",
+			"drain_timeout", drain.String(), "stream_write_timeout", controlplane.DefaultStreamWriteTimeout.String())
 	}
 
 	// Tokens come only from the environment (never flags, which show up in
@@ -170,9 +190,15 @@ func run(ctx context.Context, args []string, logOut io.Writer, getenv func(strin
 	srv := &http.Server{
 		Handler:           instrument(handler, cpm),
 		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		IdleTimeout:       120 * time.Second,
-		MaxHeaderBytes:    64 << 10,
+		// ReadTimeout is the only bound on a slowly trickled request body,
+		// so it stays. It does NOT cut SSE streams: once the handler is
+		// running, net/http clears the read deadline before its background
+		// read (that watches for the client going away). Verified by
+		// TestFixRound4_StreamOutlivesReadTimeout and by a reviewer on
+		// Go 1.26.9 and 1.27.4.
+		ReadTimeout:    *readTimeout,
+		IdleTimeout:    120 * time.Second,
+		MaxHeaderBytes: 64 << 10,
 		// No WriteTimeout: it would kill SSE streams. The stream handler
 		// sets a per-write deadline itself.
 	}
@@ -234,6 +260,22 @@ func run(ctx context.Context, args []string, logOut io.Writer, getenv func(strin
 			}
 		}
 	}()
+
+	if *headPoll > 0 {
+		// The hub is in-memory, so without this a write through replica A
+		// never reaches gateways streaming from replica B; it also repairs
+		// the rare case where a commit landed but its handler never
+		// published (e.g. the request context died right after COMMIT).
+		logger.Info("head poller enabled: versions committed by other control-plane replicas reach this replica's streams within one interval",
+			"head_poll", headPoll.String())
+		background.Add(1)
+		go func() {
+			defer background.Done()
+			pollHead(bgCtx, store, hub, *headPoll, logger)
+		}()
+	} else {
+		logger.Info("head poller disabled: run a single control-plane replica, or writes through another replica will not reach this replica's streams")
+	}
 
 	// Buffer 1: the serve goroutine never blocks reporting its result.
 	serveErr := make(chan error, 1)
@@ -300,12 +342,77 @@ func applySeed(ctx context.Context, store controlplane.Store, hub *controlplane.
 			*c = *seedCfg
 			return nil
 		})
+	if errors.Is(err, controlplane.ErrVersionConflict) {
+		// Another replica started at the same moment and won the IfMatch 0
+		// write: the store is seeded, which is all this step wants.
+		logger.Info("another control plane seeded the store first; ignoring -seed", "err", err)
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("storing seed: %w", err)
 	}
 	hub.Publish(stored)
 	logger.Info("seeded config", "version", stored.Version)
 	return nil
+}
+
+// pollHead publishes the store head to hub whenever it is newer than
+// anything the hub has seen, every interval, until ctx is done. Each tick
+// first reads only the newest version's metadata (List with limit 1), so an
+// unchanged head costs one small query rather than transferring a document
+// of up to MaxConfigBytes every interval. Hub.Publish drops anything <= its
+// max, so racing with a local write's own Publish is harmless.
+func pollHead(ctx context.Context, store controlplane.Store, hub *controlplane.Hub, interval time.Duration, logger *slog.Logger) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	failing := false // log a failure once, not every interval, until it recovers
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		cfg, err := newerHead(ctx, store, hub.Max())
+		switch {
+		case err != nil && ctx.Err() != nil:
+			return // shutdown canceled the read
+		case err != nil:
+			if !failing {
+				logger.Warn("head poller: reading the store head failed; will retry", "err", err)
+				failing = true
+			}
+			continue
+		case failing:
+			logger.Info("head poller: store reachable again")
+			failing = false
+		}
+		if cfg != nil {
+			hub.Publish(cfg)
+			logger.Info("head poller: published a version committed outside this replica's handlers", "version", cfg.Version)
+		}
+	}
+}
+
+// newerHead returns the store head if its version is above have, else nil.
+// Both store reads share one headPollTimeout budget.
+func newerHead(ctx context.Context, store controlplane.Store, have int64) (*config.Config, error) {
+	ctx, cancel := context.WithTimeout(ctx, headPollTimeout)
+	defer cancel()
+	latest, err := store.List(ctx, 1, 0)
+	if err != nil {
+		return nil, err
+	}
+	if len(latest) == 0 || latest[0].Version <= have {
+		return nil, nil
+	}
+	head, err := store.Head(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if head.Version <= have { // cannot go backwards, but never publish stale data
+		return nil, nil
+	}
+	return head, nil
 }
 
 // instrument records every request in m, labelled by the mux pattern (not

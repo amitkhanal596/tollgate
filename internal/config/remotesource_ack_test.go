@@ -122,17 +122,42 @@ func TestRemoteLKGWriteIsAtomic(t *testing.T) {
 }
 
 // Shutdown flushes a pending LKG write (disk only).
+//
+// Fix round 4: the old version called Applied(5) and cancel back to back, so
+// the worker's normal wake-up path usually wrote the file and deleting the
+// final flush went unnoticed (30/30 passes). Now the worker is parked in a
+// hung status POST when version 6 is applied, so the file provably holds
+// version 5 until cancel. Cancel then frees the worker, which has two ready
+// cases (ctx.Done and notify) and picks one at random; only the final flush
+// guarantees version 6 in both orders, so the scenario repeats to make a
+// missing flush fail with near certainty.
 func TestRemoteFinalLKGWriteOnShutdown(t *testing.T) {
-	lkg := filepath.Join(t.TempDir(), "lkg.json")
-	h := newRS(t, func(o *RemoteOptions) { o.LKGPath = lkg })
-	ch := h.watch()
-	h.cp.waitConn(t, 1).send(rsFrame(5))
-	h.expectVersion(5)
-	h.src.Applied(5)
-	h.cancel()
-	rsDrainClosed(t, ch, 2*time.Second)
-	if v, err := rsReadLKG(lkg); err != nil || v != 5 {
-		t.Fatalf("LKG after shutdown = (%d, %v), want version 5", v, err)
+	for i := 0; i < 20; i++ {
+		lkg := filepath.Join(t.TempDir(), "lkg.json")
+		h := newRS(t, func(o *RemoteOptions) { o.LKGPath = lkg; o.StatusTimeout = 30 * time.Second })
+		h.cp.statusHang.Store(true)
+		ch := h.watch()
+		c1 := h.cp.waitConn(t, 1)
+
+		c1.send(rsFrame(5))
+		h.expectVersion(5)
+		h.src.Applied(5)
+		rsWaitLKGVersion(t, lkg, 5)
+		h.cp.waitReport(t, "applied 5 (POST now hangs)", func(r rsStatusReq) bool { return r.Applied == 5 })
+
+		c1.send(rsFrame(6))
+		h.expectVersion(6)
+		h.src.Applied(6) // the worker is stuck in the POST, so this stays pending
+		time.Sleep(20 * time.Millisecond)
+		if v, err := rsReadLKG(lkg); err != nil || v != 5 {
+			t.Fatalf("iteration %d: LKG before cancel = (%d, %v), want version 5 (worker should be parked)", i, v, err)
+		}
+
+		h.cancel()
+		rsDrainClosed(t, ch, 2*time.Second)
+		if v, err := rsReadLKG(lkg); err != nil || v != 6 {
+			t.Fatalf("iteration %d: LKG after shutdown = (%d, %v), want version 6", i, v, err)
+		}
 	}
 }
 

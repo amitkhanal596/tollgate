@@ -41,8 +41,22 @@ func (m *ControlPlaneMetrics) ObserveAPIRequest(method, pattern string, status i
 	if m == nil {
 		return
 	}
+	method = boundMethod(method)
 	m.requests.WithLabelValues(method, pattern, strconv.Itoa(status)).Inc()
 	m.duration.WithLabelValues(method, pattern).Observe(d.Seconds())
+}
+
+// boundMethod maps a request method onto a fixed label set. Unknown methods are
+// answered (405/404) before any token check, so using the raw method as a label
+// would let an unauthenticated client mint unlimited series: 500 junk methods
+// once grew /metrics to ~9000 series and 18 MB.
+func boundMethod(method string) string {
+	switch method {
+	case "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS":
+		return method
+	default:
+		return "other"
+	}
 }
 
 // SetHeadVersion records the head config version.

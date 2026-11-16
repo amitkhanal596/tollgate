@@ -1,8 +1,11 @@
 package controlplane
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/amitkhanal596/tollgate/internal/config"
@@ -28,6 +31,55 @@ var (
 // (config.Validate already wraps it in every per-problem error). HTTP 400.
 // Every other error (database unreachable, context canceled, ...) is an
 // internal error, HTTP 500.
+
+// marshalStored encodes a validated, version-stamped config as both stores
+// persist it, and enforces the limits that Validate cannot see because they
+// are properties of the encoded document. Both stores call it after Validate
+// and before writing anything, so a rejection stores nothing and consumes no
+// version. Errors wrap config.ErrInvalid (HTTP 400).
+//
+//   - Size: more than MaxConfigBytes is rejected (see MaxConfigBytes for why
+//     4 MiB).
+//   - NUL: Postgres JSONB (and TEXT) cannot store U+0000, so a document with
+//     a NUL in any string would fail the INSERT with a 500. Rejecting it here
+//     in both stores keeps MemStore and PostgresStore answering alike.
+func marshalStored(cfg *config.Config) ([]byte, error) {
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("encode config version %d: %w", cfg.Version, err)
+	}
+	if len(b) > MaxConfigBytes {
+		return nil, fmt.Errorf("%w: config is %d bytes as JSON, more than the %d byte (4 MiB) limit",
+			config.ErrInvalid, len(b), MaxConfigBytes)
+	}
+	if hasNULEscape(b) {
+		return nil, fmt.Errorf("%w: config contains a NUL character (\\u0000) in a string, which cannot be stored", config.ErrInvalid)
+	}
+	return b, nil
+}
+
+// hasNULEscape reports whether the JSON text b contains the escape \u0000.
+// json.Marshal always escapes U+0000 that way, but the six bytes also occur
+// in an escaped literal backslash followed by "u0000" (\\u0000), so an
+// occurrence only counts when an even number of backslashes precede it.
+func hasNULEscape(b []byte) bool {
+	pat := []byte(`\u0000`)
+	for i := 0; ; {
+		j := bytes.Index(b[i:], pat)
+		if j < 0 {
+			return false
+		}
+		j += i
+		k := j
+		for k > 0 && b[k-1] == '\\' {
+			k--
+		}
+		if (j-k)%2 == 0 {
+			return true
+		}
+		i = j + 1
+	}
+}
 
 // List page sizes. List clamps limit into [1, MaxListLimit], treating
 // limit < 1 as DefaultListLimit.

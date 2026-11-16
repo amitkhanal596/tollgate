@@ -124,6 +124,17 @@ type RemoteSource struct {
 	lastRejected int64
 	lastErr      string
 	reportDirty  bool
+	// workerDone is set by the worker as it exits. From then on nobody would
+	// pick up lkgPending, so a late Applied writes the LKG file itself.
+	workerDone bool
+
+	// lkgMu serializes LKG writes and guards lkgWritten. Normally only the
+	// worker writes, so it is uncontended; it exists for the shutdown overlap
+	// where the worker's final flush and a late Applied could both write.
+	// Holding it across the write (disk I/O) is the point: two renames racing
+	// could otherwise leave the older version on disk.
+	lkgMu      sync.Mutex
+	lkgWritten int64 // highest version written to LKGPath by this process
 }
 
 // NewRemoteSource validates opts and returns a source; nothing starts until
@@ -251,6 +262,7 @@ func (s *RemoteSource) Watch(ctx context.Context) (<-chan *Config, error) {
 	s.mu.Unlock()
 
 	out := make(chan *Config, 1)
+	s.removeStaleLKGTemps()
 	if cfg := s.loadLKG(); cfg != nil {
 		s.mu.Lock()
 		s.delivered = cfg.Version
@@ -267,6 +279,22 @@ func (s *RemoteSource) Watch(ctx context.Context) (<-chan *Config, error) {
 	// send (or still has work) has exited.
 	go func() { wg.Wait(); close(out) }()
 	return out, nil
+}
+
+// removeStaleLKGTemps deletes temp files a crash between CreateTemp and rename
+// left behind. Nothing else writes them before Watch starts, so it is safe to
+// do synchronously here. Failure only costs disk space, so it is logged.
+func (s *RemoteSource) removeStaleLKGTemps() {
+	if s.lkgPath == "" {
+		return
+	}
+	removed, err := removeStaleLKGTemps(s.lkgPath)
+	for _, name := range removed {
+		s.log.Info("removed stale last-known-good temp file", "file", name)
+	}
+	if err != nil {
+		s.log.Warn("removing stale last-known-good temp files", "path", s.lkgPath, "error", err)
+	}
 }
 
 // loadLKG returns the last-known-good config, or nil if there is none or it
@@ -449,7 +477,15 @@ func (s *RemoteSource) handleConfig(f sseFrame, out chan *Config) {
 // ---- acknowledgements --------------------------------------------------------
 
 // Applied implements Acknowledger: it advances the cursor in memory and hands
-// the LKG write and the status report to the worker. It never blocks.
+// the LKG write and the status report to the worker. While Watch is running it
+// never blocks.
+//
+// Late acks are allowed by the Acknowledger contract: the reconcile loop can
+// finish applying a config just as ctx is canceled. Once the worker has
+// exited, nobody would ever pick up lkgPending, and a restart with the
+// control plane down would come back one version behind. So on that path
+// only, Applied writes the LKG file synchronously (one small file, fsync and
+// rename). The status report is not sent: shutdown has canceled its context.
 func (s *RemoteSource) Applied(version int64) {
 	s.mu.Lock()
 	cfg, ok := s.pending[version]
@@ -462,12 +498,17 @@ func (s *RemoteSource) Applied(version int64) {
 	// Every pending entry is above the cursor (acks delete everything at or
 	// below their version), so this only moves forwards.
 	s.cursor = max(s.cursor, version)
-	if s.lkgPath != "" {
+	writeNow := s.lkgPath != "" && s.workerDone
+	if s.lkgPath != "" && !s.workerDone {
 		s.lkgPending = cfg
 	}
 	s.prunePendingLocked(version)
 	s.reportDirty = true
 	s.mu.Unlock()
+	if writeNow {
+		s.persist(cfg)
+		return
+	}
 	s.signal()
 }
 
@@ -545,9 +586,14 @@ func (s *RemoteSource) workLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			// Taking lkgPending and setting workerDone in one critical
+			// section means every Applied is handled exactly once: before
+			// this point its config is in lkgPending (flushed below), after
+			// it Applied writes the file itself.
 			s.mu.Lock()
 			lkg := s.lkgPending
 			s.lkgPending = nil
+			s.workerDone = true
 			s.mu.Unlock()
 			if lkg != nil {
 				s.persist(lkg)
@@ -576,12 +622,20 @@ func (s *RemoteSource) workLoop(ctx context.Context) {
 
 // persist writes the LKG file. Failure is logged, not retried: the config is
 // live in memory and the file only matters after a restart. The next Applied
-// writes a fresh copy anyway.
+// writes a fresh copy anyway. Writes are serialized and never go backwards,
+// so the worker's final flush and a late Applied cannot leave an older
+// version on disk.
 func (s *RemoteSource) persist(cfg *Config) {
+	s.lkgMu.Lock()
+	defer s.lkgMu.Unlock()
+	if cfg.Version <= s.lkgWritten {
+		return
+	}
 	if err := writeLKG(s.lkgPath, cfg); err != nil {
 		s.log.Error("writing last-known-good config file failed", "path", s.lkgPath, "version", cfg.Version, "error", err)
 		return
 	}
+	s.lkgWritten = cfg.Version
 	s.log.Debug("wrote last-known-good config file", "path", s.lkgPath, "version", cfg.Version)
 }
 

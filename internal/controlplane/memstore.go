@@ -178,10 +178,13 @@ func (s *MemStore) write(ctx context.Context, req UpdateRequest, rollbackTo *int
 	if err := next.Validate(); err != nil {
 		return nil, err
 	}
-
-	stored, err := cloneConfig(next) // the store keeps its own copy
+	b, err := marshalStored(next) // same encoding and limits as PostgresStore
 	if err != nil {
 		return nil, err
+	}
+	stored := new(config.Config) // the store keeps its own copy, decoded like a stored body
+	if err := json.Unmarshal(b, stored); err != nil {
+		return nil, fmt.Errorf("clone config: decode: %w", err)
 	}
 	s.versions = append(s.versions, memVersion{
 		cfg: stored,

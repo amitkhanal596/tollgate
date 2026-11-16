@@ -100,6 +100,17 @@ func serveStream(w http.ResponseWriter, r *http.Request, d streamDeps) {
 		return
 	}
 
+	// Register before any stream byte is written, so a full registry can
+	// still be answered with a plain 503 (the gateway backs off and retries)
+	// instead of a stream that would be invisible in GET /v1/dataplanes.
+	disconnect, ok := d.Nodes.TryConnect(node, since)
+	if !ok {
+		d.Logger.Warn("config stream: data-plane registry is full of connected nodes; refusing stream", "node", node)
+		writeStreamError(w, http.StatusServiceUnavailable, "too many connected data planes")
+		return
+	}
+	defer disconnect()
+
 	h := w.Header()
 	h.Set("Content-Type", ContentTypeEventStream)
 	h.Set("Cache-Control", "no-store")
@@ -118,8 +129,6 @@ func serveStream(w http.ResponseWriter, r *http.Request, d streamDeps) {
 		return
 	}
 
-	disconnect := d.Nodes.Connect(node, since)
-	defer disconnect()
 	d.Logger.Info("config stream: connected", "node", node, "since", since, "head", head.Version)
 
 	lastSent := since

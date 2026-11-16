@@ -1,6 +1,7 @@
 package controlplane
 
 import (
+	"container/list"
 	"slices"
 	"strings"
 	"sync"
@@ -15,8 +16,10 @@ import (
 // together and there is no ordering to get wrong.
 
 // Hub fans committed configs out to SSE stream handlers (ADR 0005,
-// architecture §11 row 5). It is in-memory, so it serves one control-plane
-// replica; multi-replica fan-out (Postgres LISTEN/NOTIFY) is future work.
+// architecture §11 row 5). It is in-memory, so it only sees writes made
+// through this replica's handlers; cmd/controlplane's head poller publishes
+// versions committed elsewhere (another replica) within one poll interval.
+// Push-based fan-out (Postgres LISTEN/NOTIFY) is future work.
 //
 // The Hub owns no goroutine. All methods are safe for concurrent use and
 // never block on subscribers: they hold the hub mutex only for O(number of
@@ -49,6 +52,19 @@ type Hub struct {
 	max    *config.Config             // highest version ever accepted; nil before the first
 	subs   map[*subscription]struct{} // open subscriptions; nil after Close
 	closed bool
+}
+
+// Max returns the highest version published to the hub, 0 if none (or after
+// Close). cmd/controlplane's head poller compares Store.Head against it, so
+// it only publishes versions this hub has not seen. It is called once per
+// poll interval, not on a hot path, so it shares the hub mutex.
+func (h *Hub) Max() int64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.max == nil {
+		return 0
+	}
+	return h.max.Version
 }
 
 // subscription is one subscriber's slot. ch is closed exactly once, by
@@ -209,23 +225,46 @@ type NodeStatus struct {
 	LastError string `json:"last_error,omitempty"`
 }
 
+// DefaultMaxNodes caps the Nodes registry used by NewNodes. Node IDs come
+// from (token-holding) clients, so without a cap a buggy or compromised
+// data plane could grow the map, and GET /v1/dataplanes, without bound.
+// 4096 is far above any realistic fleet behind one control plane.
+const DefaultMaxNodes = 4096
+
 // Nodes is the in-memory registry of data planes behind GET /v1/dataplanes.
 // All methods are safe for concurrent use and never block beyond a short
 // mutex hold. Node IDs are validated by the HTTP layer before they reach
 // Nodes.
 //
-// Eviction is lazy (no goroutine): List drops entries that are not
-// connected and whose LastSeen is older than the TTL.
+// Expiry is lazy (no goroutine): List drops entries that are not connected
+// and whose LastSeen is older than the TTL.
+//
+// The registry holds at most max entries. Admitting a new node ID at the cap
+// evicts the least-recently-seen DISCONNECTED entry; if every entry is
+// connected, the new node is refused (TryConnect returns ok == false, the
+// stream handler answers 503, and Report/Offered/Seen drop the update).
+// Connected entries are never evicted: they are live gateways, and their
+// disconnect closures still point at them.
+//
+// Eviction is O(1): disconnected entries are kept on a list ordered by when
+// they were last seen (each touch moves the entry to the back), so the
+// victim is always the front element. No method scans the registry except
+// List, which is O(n) anyway because it copies everything out.
 //
 // Why a mutex: every method is a read-modify-write of several fields of one
-// entry (and List also deletes), the registry is touched a few times per
-// stream connection and heartbeat, never per proxied request, so a single
-// short-held mutex is simpler than per-field atomics and plenty fast.
+// entry plus the map and the idle list together, the registry is touched a
+// few times per stream connection and heartbeat, never per proxied request,
+// so a single short-held mutex is simpler than per-field atomics and plenty
+// fast.
 type Nodes struct {
 	mu    sync.Mutex
 	now   func() time.Time
 	ttl   time.Duration
+	max   int
 	nodes map[string]*nodeEntry
+	// idle holds every entry with conns == 0, least recently seen at the
+	// front. Values are *nodeEntry.
+	idle *list.List
 }
 
 // nodeEntry is a NodeStatus plus the number of open stream connections.
@@ -233,44 +272,107 @@ type Nodes struct {
 type nodeEntry struct {
 	status NodeStatus
 	conns  int
+	// idleElem is the entry's element in Nodes.idle; non-nil exactly when
+	// conns == 0.
+	idleElem *list.Element
 }
 
-// NewNodes returns an empty registry. A nil now uses time.Now; ttl <= 0
-// uses DefaultNodeTTL.
+// NewNodes returns an empty registry capped at DefaultMaxNodes. A nil now
+// uses time.Now; ttl <= 0 uses DefaultNodeTTL.
 func NewNodes(now func() time.Time, ttl time.Duration) *Nodes {
+	return NewNodesWithLimit(now, ttl, DefaultMaxNodes)
+}
+
+// NewNodesWithLimit is NewNodes with an explicit registry cap; max <= 0 uses
+// DefaultMaxNodes.
+func NewNodesWithLimit(now func() time.Time, ttl time.Duration, max int) *Nodes {
 	if now == nil {
 		now = time.Now
 	}
 	if ttl <= 0 {
 		ttl = DefaultNodeTTL
 	}
-	return &Nodes{now: now, ttl: ttl, nodes: make(map[string]*nodeEntry)}
-}
-
-// entry returns node's entry, creating it if needed. Caller holds n.mu.
-func (n *Nodes) entry(node string) *nodeEntry {
-	e, ok := n.nodes[node]
-	if !ok {
-		e = &nodeEntry{status: NodeStatus{Node: node}}
-		n.nodes[node] = e
+	if max <= 0 {
+		max = DefaultMaxNodes
 	}
-	return e
+	return &Nodes{now: now, ttl: ttl, max: max, nodes: make(map[string]*nodeEntry), idle: list.New()}
 }
 
-// Connect records that a stream connection for node opened, with the
+// entry returns node's entry, admitting it if it is new. At the cap it
+// evicts the least-recently-seen disconnected entry first; if there is none
+// (every entry is connected) it returns false and changes nothing. Caller
+// holds n.mu.
+func (n *Nodes) entry(node string) (*nodeEntry, bool) {
+	if e, ok := n.nodes[node]; ok {
+		return e, true
+	}
+	if len(n.nodes) >= n.max {
+		victim := n.idle.Front()
+		if victim == nil {
+			return nil, false
+		}
+		n.remove(victim.Value.(*nodeEntry))
+	}
+	e := &nodeEntry{status: NodeStatus{Node: node}}
+	e.idleElem = n.idle.PushBack(e) // a new entry has no connection yet
+	n.nodes[node] = e
+	return e, true
+}
+
+// remove deletes a disconnected entry from the map and the idle list.
+// Caller holds n.mu.
+func (n *Nodes) remove(e *nodeEntry) {
+	n.idle.Remove(e.idleElem)
+	e.idleElem = nil
+	delete(n.nodes, e.status.Node)
+}
+
+// touch sets LastSeen to now and, for a disconnected entry, moves it to the
+// back of the idle list, keeping the list in last-seen order. Caller holds
+// n.mu.
+func (n *Nodes) touch(e *nodeEntry, now time.Time) {
+	e.status.LastSeen = now
+	if e.idleElem != nil {
+		n.idle.MoveToBack(e.idleElem)
+	}
+}
+
+// Connect is TryConnect for callers that cannot act on a refusal: when the
+// registry is full of connected nodes the connection is simply not recorded
+// and the returned disconnect is a no-op. The stream handler uses
+// TryConnect so it can answer 503 instead.
+func (n *Nodes) Connect(node string, since int64) (disconnect func()) {
+	if d, ok := n.TryConnect(node, since); ok {
+		return d
+	}
+	return func() {}
+}
+
+// TryConnect records that a stream connection for node opened, with the
 // version the node says it has applied (since, after Last-Event-ID
-// override). It creates the entry if needed, increments the connection
-// count, sets ConnectedAt and LastSeen to now, and sets AppliedVersion to
-// since (overwrite, not max: a restarted gateway legitimately goes back to
-// 0).
+// override). It admits the entry if needed (see Nodes for the cap),
+// increments the connection count, sets ConnectedAt and LastSeen to now, and
+// sets AppliedVersion to since (overwrite, not max: a restarted gateway
+// legitimately goes back to 0).
+//
+// ok is false, disconnect nil and nothing changed when node is new, the
+// registry is at its cap and every entry is connected.
 //
 // The returned disconnect function decrements the connection count and
 // updates LastSeen; it is idempotent. The stream handler defers it.
-func (n *Nodes) Connect(node string, since int64) (disconnect func()) {
+func (n *Nodes) TryConnect(node string, since int64) (disconnect func(), ok bool) {
 	n.mu.Lock()
+	e, ok := n.entry(node)
+	if !ok {
+		n.mu.Unlock()
+		return nil, false
+	}
 	now := n.now()
-	e := n.entry(node)
 	e.conns++
+	if e.idleElem != nil { // connected entries are never eviction candidates
+		n.idle.Remove(e.idleElem)
+		e.idleElem = nil
+	}
 	// A fresh pointer per connection: List hands out copies, so the value
 	// behind an old pointer is never mutated.
 	connectedAt := now
@@ -282,33 +384,43 @@ func (n *Nodes) Connect(node string, since int64) (disconnect func()) {
 	var once sync.Once
 	return func() {
 		// Once makes a double disconnect harmless; holding e directly is
-		// safe because List never evicts an entry while conns > 0.
+		// safe because nothing evicts or expires an entry while conns > 0.
 		once.Do(func() {
 			n.mu.Lock()
 			defer n.mu.Unlock()
 			e.conns--
 			e.status.LastSeen = n.now()
+			if e.conns == 0 {
+				e.idleElem = n.idle.PushBack(e) // just seen: the newest idle entry
+			}
 		})
-	}
+	}, true
 }
 
 // Offered records that version was written to node's stream successfully:
 // LastOfferedVersion = max(LastOfferedVersion, version), LastSeen = now.
-// A call for an unknown node creates the entry.
+// A call for an unknown node creates the entry if it can be admitted, and is
+// dropped otherwise.
 func (n *Nodes) Offered(node string, version int64) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	e := n.entry(node)
+	e, ok := n.entry(node)
+	if !ok {
+		return
+	}
 	e.status.LastOfferedVersion = max(e.status.LastOfferedVersion, version)
-	e.status.LastSeen = n.now()
+	n.touch(e, n.now())
 }
 
 // Seen updates LastSeen (after a successful heartbeat write). A call for
-// an unknown node creates the entry.
+// an unknown node creates the entry if it can be admitted, and is dropped
+// otherwise.
 func (n *Nodes) Seen(node string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	n.entry(node).status.LastSeen = n.now()
+	if e, ok := n.entry(node); ok {
+		n.touch(e, n.now())
+	}
 }
 
 // Report records a status report from POST /v1/dataplanes/{node}/status.
@@ -316,15 +428,21 @@ func (n *Nodes) Seen(node string) {
 // report's Applied, LastRejected and Error (the latest report describes the
 // node's whole current state) and sets LastSeen. It creates the entry if
 // needed (a gateway may report an LKG-applied version before its stream
-// connects), leaving ConnectedAt nil.
+// connects), leaving ConnectedAt nil. A report for a new node that cannot
+// be admitted (registry full of connected nodes) is dropped silently: the
+// status endpoint is best effort and the gateway's own metrics stay
+// authoritative.
 func (n *Nodes) Report(node string, r StatusReport) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	e := n.entry(node)
+	e, ok := n.entry(node)
+	if !ok {
+		return
+	}
 	e.status.AppliedVersion = r.Applied
 	e.status.RejectedVersion = r.LastRejected
 	e.status.LastError = r.Error
-	e.status.LastSeen = n.now()
+	n.touch(e, n.now())
 }
 
 // List first evicts expired entries (not connected and LastSeen older than
@@ -334,9 +452,9 @@ func (n *Nodes) List() []NodeStatus {
 	n.mu.Lock()
 	now := n.now()
 	out := make([]NodeStatus, 0, len(n.nodes))
-	for id, e := range n.nodes {
+	for _, e := range n.nodes {
 		if e.conns == 0 && now.Sub(e.status.LastSeen) > n.ttl {
-			delete(n.nodes, id) // deleting during range is allowed in Go
+			n.remove(e) // deleting during range is allowed in Go
 			continue
 		}
 		ns := e.status

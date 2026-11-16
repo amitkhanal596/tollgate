@@ -41,6 +41,9 @@
 //	//     canonicalisation; algorithm is round_robin|least_conn; health
 //	//     thresholds >= 1; 0 < timeout < interval.
 //	//   - API keys: client_id unique, sha256 64 lower-case hex and unique.
+//	//   - auth.jwt, whenever present: algorithm is HS256|RS256; HS256
+//	//     requires hmac_secret_env and forbids public_key_file; RS256
+//	//     requires public_key_file and forbids hmac_secret_env.
 //	//   - An empty config (no routes) is valid: the control plane starts
 //	//     empty. FileSource additionally rejects a file with no routes.
 //	func (c *Config) Validate() error

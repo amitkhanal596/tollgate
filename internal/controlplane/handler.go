@@ -1,6 +1,7 @@
 package controlplane
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -13,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/amitkhanal596/tollgate/internal/config"
 )
@@ -246,27 +248,59 @@ func writeRequest(w http.ResponseWriter, r *http.Request) (UpdateRequest, bool) 
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("%s longer than %d bytes", HeaderAuthor, MaxAuthorBytes))
 		return UpdateRequest{}, false
 	}
+	if !validLabel(author) {
+		writeError(w, http.StatusBadRequest, HeaderAuthor+" "+labelRule)
+		return UpdateRequest{}, false
+	}
 	comment := r.Header.Get(HeaderComment)
 	if len(comment) > MaxCommentBytes {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("%s longer than %d bytes", HeaderComment, MaxCommentBytes))
 		return UpdateRequest{}, false
 	}
+	if !validLabel(comment) {
+		writeError(w, http.StatusBadRequest, HeaderComment+" "+labelRule)
+		return UpdateRequest{}, false
+	}
 	return UpdateRequest{IfMatch: ifMatch, Author: author, Comment: comment}, true
+}
+
+const labelRule = "must be valid UTF-8 without control characters"
+
+// validLabel reports whether an audit label can be stored and shown safely:
+// valid UTF-8 (Postgres TEXT rejects anything else, which would be a 500
+// after the write lock was taken) and no control bytes (< 0x20, 0x7f; NUL is
+// also unstorable, and CR/LF would forge lines in logs and terminals). All
+// control characters are ASCII, so a byte loop is enough once the UTF-8
+// check has passed.
+func validLabel(s string) bool {
+	if !utf8.ValidString(s) {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c < 0x20 || c == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 // errEmptyBody is returned by decodeBody when the body holds no JSON value.
 var errEmptyBody = errors.New("request body is empty")
 
 // decodeBody reads the capped body and strictly decodes one JSON value into
-// v: unknown fields, a wrong type, or anything but whitespace after the value
-// is an error (rule 4). It returns errEmptyBody for an empty body. On any
-// other failure it has written the 400/413 and returns a non-nil error with
-// written == true.
+// v: unknown fields, a wrong type, a null, or anything but whitespace after
+// the value is an error (rule 4). It returns errEmptyBody for an empty body.
+// On any other failure it has written the 400/413 and returns a non-nil
+// error with written == true.
 func decodeBody(w http.ResponseWriter, r *http.Request, v any) (written bool, err error) {
 	body := http.MaxBytesReader(w, r.Body, MaxBodyBytes)
 	dec := json.NewDecoder(body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(v); err != nil {
+	// The value is captured raw first so a top-level null can be told apart:
+	// decoding null into a struct succeeds and leaves it zero, which would
+	// silently mean "empty config" for PUT /v1/config and "head - 1" for a
+	// rollback.
+	var raw json.RawMessage
+	if err := dec.Decode(&raw); err != nil {
 		if errors.Is(err, io.EOF) {
 			return false, errEmptyBody
 		}
@@ -279,6 +313,16 @@ func decodeBody(w http.ResponseWriter, r *http.Request, v any) (written bool, er
 			err = errors.New("unexpected data after the JSON value")
 		}
 		return true, bodyError(w, err, "invalid JSON body: unexpected data after the JSON value")
+	}
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		err := errors.New("JSON body must be an object, not null")
+		writeError(w, http.StatusBadRequest, err.Error())
+		return true, err
+	}
+	strict := json.NewDecoder(bytes.NewReader(raw))
+	strict.DisallowUnknownFields()
+	if err := strict.Decode(v); err != nil {
+		return true, bodyError(w, err, "invalid JSON body: "+err.Error())
 	}
 	return false, nil
 }

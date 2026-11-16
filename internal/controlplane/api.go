@@ -105,10 +105,20 @@ const (
 	// DefaultHeartbeat is the stream heartbeat interval. The gateway's idle
 	// timeout (45 s) is three heartbeats.
 	DefaultHeartbeat = 15 * time.Second
+	// MaxConfigBytes caps the JSON size of a whole stored config document
+	// (as written: Version stamped, Normalized). A write whose result is
+	// larger is a 400 wrapping config.ErrInvalid. 4 MiB is half the
+	// gateway's 8 MiB SSE event limit (config.DefaultRemoteMaxEventBytes),
+	// so anything the control plane accepts every gateway can receive, with
+	// room to spare for the event framing. MaxBodyBytes alone does not bound
+	// it: many small PUTs can grow one document without limit.
+	MaxConfigBytes = 4 << 20
 	// DefaultStreamWriteTimeout bounds each write+flush on a stream (via
 	// http.ResponseController.SetWriteDeadline), so a peer that stopped
-	// reading cannot pin a handler goroutine forever.
-	DefaultStreamWriteTimeout = 10 * time.Second
+	// reading cannot pin a handler goroutine forever. It is strictly below
+	// cmd/controlplane's default 10 s drain timeout, so one stuck stream
+	// cannot turn a clean shutdown into a drain timeout.
+	DefaultStreamWriteTimeout = 5 * time.Second
 	// DefaultStoreTimeout bounds the Store calls of one non-stream request.
 	DefaultStoreTimeout = 10 * time.Second
 	// ReadyzTimeout bounds Store.Ping in /readyz.

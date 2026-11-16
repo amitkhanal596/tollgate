@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // lkgFileMode is the permission of the last-known-good file: owner read and
@@ -46,7 +47,7 @@ func writeLKG(path string, cfg *Config) (err error) {
 		return fmt.Errorf("marshal: %w", err)
 	}
 	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*") // created with mode 0600
+	tmp, err := os.CreateTemp(dir, lkgTempPrefix(path)+"*") // created with mode 0600
 	if err != nil {
 		return err
 	}
@@ -80,4 +81,39 @@ func writeLKG(path string, cfg *Config) (err error) {
 		_ = d.Close()
 	}
 	return nil
+}
+
+// lkgTempPrefix is the name prefix of writeLKG's temp files for path.
+// Including the LKG file's own base name keeps the temp files of different
+// LKG files in one directory apart.
+func lkgTempPrefix(path string) string {
+	return filepath.Base(path) + ".tmp-"
+}
+
+// removeStaleLKGTemps removes regular files in path's directory whose name
+// starts with lkgTempPrefix(path), and returns the names it removed. It does
+// not touch path itself, other LKG files or their temp files. It must only
+// run while no writeLKG for path is in flight (it would delete its temp
+// file), i.e. before the source starts.
+func removeStaleLKGTemps(path string) (removed []string, err error) {
+	dir, prefix := filepath.Dir(path), lkgTempPrefix(path)
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil // no directory, so no temp files; writes will log their own error
+	}
+	if err != nil {
+		return nil, err
+	}
+	var errs []error
+	for _, e := range entries {
+		if !e.Type().IsRegular() || !strings.HasPrefix(e.Name(), prefix) {
+			continue
+		}
+		if rerr := os.Remove(filepath.Join(dir, e.Name())); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
+			errs = append(errs, rerr)
+			continue
+		}
+		removed = append(removed, e.Name())
+	}
+	return removed, errors.Join(errs...)
 }

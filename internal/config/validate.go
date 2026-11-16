@@ -116,11 +116,38 @@ func (c *Config) Validate() error {
 		}
 		hashes[k.SHA256] = true
 	}
-	if j := c.Auth.JWT; j != nil && j.Algorithm != JWTHS256 && j.Algorithm != JWTRS256 {
-		bad("auth.jwt.algorithm %q must be HS256 or RS256", j.Algorithm)
+	if j := c.Auth.JWT; j != nil {
+		validateJWT(j, bad)
 	}
 
 	return errors.Join(errs...)
+}
+
+// validateJWT checks that the key material matches the algorithm. It runs
+// whenever auth.jwt is present, even if no route uses jwt yet: otherwise a
+// config that the auth builder cannot turn into a verifier would be accepted
+// and only fail on the gateway once a route starts using it.
+func validateJWT(j *JWTSettings, bad func(string, ...any)) {
+	switch j.Algorithm {
+	case JWTHS256:
+		if j.HMACSecretEnv == "" {
+			bad("auth.jwt.hmac_secret_env must be set for algorithm HS256")
+		}
+		// A key file next to HS256 is a sign of confusion about which key is
+		// in use; rejecting it is cheaper than debugging a silent mismatch.
+		if j.PublicKeyFile != "" {
+			bad("auth.jwt.public_key_file must not be set for algorithm HS256")
+		}
+	case JWTRS256:
+		if j.PublicKeyFile == "" {
+			bad("auth.jwt.public_key_file must be set for algorithm RS256")
+		}
+		if j.HMACSecretEnv != "" {
+			bad("auth.jwt.hmac_secret_env must not be set for algorithm RS256")
+		}
+	default:
+		bad("auth.jwt.algorithm %q must be HS256 or RS256", j.Algorithm)
+	}
 }
 
 // MaxRateLimit bounds rate_limit.burst and rate_limit.requests_per_second.

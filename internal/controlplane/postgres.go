@@ -189,9 +189,11 @@ func (s *PostgresStore) write(ctx context.Context, req UpdateRequest,
 		return nil, err
 	}
 
-	body, err := json.Marshal(next)
+	// Checked before the INSERT so a rejected document never reaches
+	// Postgres (a failed statement would abort the transaction).
+	body, err := marshalStored(next)
 	if err != nil {
-		return nil, fmt.Errorf("encode config version %d: %w", next.Version, err)
+		return nil, err
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO config_versions (version, body, author, comment, rolled_back_from)
 		VALUES ($1, $2, $3, $4, $5)`, next.Version, body, req.Author, req.Comment, rolledFrom); err != nil {
