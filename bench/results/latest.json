@@ -1,0 +1,5372 @@
+{
+  "hot_reload": {
+    "test": "hot-reload",
+    "config": {
+      "changes": 100,
+      "load_rps": 300,
+      "slow_load_rps": 100,
+      "period_s": 0.5,
+      "rollback_every": 10,
+      "load_seconds": 58,
+      "slow_backend_delay_s": 2
+    },
+    "changes_done": 100,
+    "puts": 90,
+    "rollbacks": 10,
+    "reloader_seconds": 49.506,
+    "admin_failed": 0,
+    "propagation_timeouts": 0,
+    "requests_total": 23314,
+    "non_2xx": 0,
+    "connection_errors": 0,
+    "dropped_iterations": 0,
+    "propagation_ms": {
+      "min": 0,
+      "p50": 4,
+      "p90": 5,
+      "p95": 5.049999999999997,
+      "p99": 7.409999999999999,
+      "max": 8,
+      "avg": 3.8833333333333333
+    },
+    "propagation_from_send_ms": {
+      "min": 2,
+      "p50": 7,
+      "p90": 11.100000000000001,
+      "p95": 12,
+      "p99": 12.41,
+      "max": 13,
+      "avg": 7.383333333333334
+    },
+    "admin_call_ms": {
+      "min": 1,
+      "p50": 4,
+      "p90": 5.100000000000002,
+      "p95": 7,
+      "p99": 8,
+      "max": 8,
+      "avg": 3.49
+    },
+    "requests_logged": 23201,
+    "changes_logged": 100,
+    "spanning_requests": 5150,
+    "spanning_requests_slow_route": 5150,
+    "spanning_requests_fast_route": 0,
+    "spanning_requests_failed": 0,
+    "spanning_per_change": {
+      "min": 189,
+      "median": 199,
+      "max": 200
+    },
+    "span_definition": "started before the admin call was sent and ended after the change was observed (or admin return + 100 ms when not observable)",
+    "host": {
+      "head_version_before": 1,
+      "head_version": 101,
+      "applied_version": 101,
+      "gateway_restarted": false
+    }
+  },
+  "limiter": {
+    "test": "limiter",
+    "config": {
+      "rate_limit_rps": 100,
+      "burst": 100,
+      "duration_s": 15,
+      "offered_multiple": 2,
+      "noisy_keys": 4,
+      "polite_rps": 50,
+      "offered_per_key_rps": 200
+    },
+    "single_key": {
+      "key": 0,
+      "offered_rps": 200,
+      "window_s": 15.001000000000001,
+      "requests": 3000,
+      "allowed": 1599,
+      "rejected": 1401,
+      "other_status": 0,
+      "expected_allowed": 1600.1000000000001,
+      "error_pct": -0.06874570339354642,
+      "max_gap_ms": 50.0,
+      "offered_ok": true
+    },
+    "multi_key": {
+      "noisy_keys": [
+        {
+          "key": 0,
+          "offered_rps": 200,
+          "window_s": 15.004000000000001,
+          "requests": 3001,
+          "allowed": 1599,
+          "rejected": 1402,
+          "other_status": 0,
+          "expected_allowed": 1600.4,
+          "error_pct": -0.08747813046738884,
+          "max_gap_ms": 18.0,
+          "offered_ok": true
+        },
+        {
+          "key": 1,
+          "offered_rps": 200,
+          "window_s": 15.0,
+          "requests": 3000,
+          "allowed": 1599,
+          "rejected": 1401,
+          "other_status": 0,
+          "expected_allowed": 1600.0,
+          "error_pct": -0.0625,
+          "max_gap_ms": 17.0,
+          "offered_ok": true
+        },
+        {
+          "key": 2,
+          "offered_rps": 200,
+          "window_s": 15.001000000000001,
+          "requests": 3000,
+          "allowed": 1599,
+          "rejected": 1401,
+          "other_status": 0,
+          "expected_allowed": 1600.1000000000001,
+          "error_pct": -0.06874570339354642,
+          "max_gap_ms": 16.0,
+          "offered_ok": true
+        },
+        {
+          "key": 3,
+          "offered_rps": 200,
+          "window_s": 15.0,
+          "requests": 3000,
+          "allowed": 1599,
+          "rejected": 1401,
+          "other_status": 0,
+          "expected_allowed": 1600.0,
+          "error_pct": -0.0625,
+          "max_gap_ms": 18.0,
+          "offered_ok": true
+        }
+      ],
+      "noisy_keys_generator_ok": 4,
+      "noisy_error_pct": {
+        "min": -0.08747813046738884,
+        "median": -0.0656228516967732,
+        "max": -0.0625
+      },
+      "noisy_allowed": {
+        "min": 1599,
+        "median": 1599.0,
+        "max": 1599
+      },
+      "polite_key": {
+        "key": 9,
+        "offered_rps": 50,
+        "window_s": 15.0,
+        "requests": 750,
+        "allowed": 750,
+        "rejected": 0,
+        "other_status": 0,
+        "expected_allowed": 1600.0,
+        "error_pct": -53.125,
+        "max_gap_ms": 31.0,
+        "offered_ok": true
+      },
+      "polite_isolated": true
+    },
+    "rejected_total": 7006,
+    "bad_rejects": 0,
+    "missing_retry_after": 0,
+    "other_status": 0,
+    "k6_dropped_iterations": {
+      "single": 0,
+      "noisy": 0,
+      "polite": 0
+    }
+  },
+  "maxrps": {
+    "direct": [
+      {
+        "test": "maxrps",
+        "target": "direct",
+        "url": "http://demo-1:8080/bare",
+        "criteria": {
+          "max_error_rate": 0.001,
+          "p99_ms_below": 50,
+          "min_achieved_fraction": 0.98,
+          "step_duration_s": 8,
+          "ramp_s": 1,
+          "warmup_s": 5
+        },
+        "shape": "ramping-arrival-rate, one scenario, connection-stable",
+        "start_epoch_ms": 1794846441598,
+        "summary_epoch_ms": 1794846518795,
+        "test_run_duration_ms": 77001.438716,
+        "dropped_iterations_total": 0,
+        "max_vus": 600,
+        "steps": [
+          {
+            "step": "s0",
+            "target_rps": 2000,
+            "achieved_rps": 2000.375,
+            "requests": 16003,
+            "error_rate": 0,
+            "p50_ms": 0.182708,
+            "p90_ms": 0.5378584000000001,
+            "p99_ms": 3.475078019999999,
+            "max_ms": 26.822084,
+            "hold_start_offset_s": 6,
+            "hold_end_offset_s": 14,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.48644999999999994,
+              "gateway": 0.0029,
+              "demo": 0.19190000000000002,
+              "other": 0.06105,
+              "total": 0.74505
+            },
+            "stall_max_ms": 27.2,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 0,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s1",
+            "target_rps": 4000,
+            "achieved_rps": 3999.875,
+            "requests": 31999,
+            "error_rate": 0,
+            "p50_ms": 0.145584,
+            "p90_ms": 0.3656662,
+            "p99_ms": 2.0278961599999983,
+            "max_ms": 17.692666,
+            "hold_start_offset_s": 15,
+            "hold_end_offset_s": 23,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.6013000000000001,
+              "gateway": 0.00195,
+              "demo": 0.26020000000000004,
+              "other": 0.05785,
+              "total": 0.93015
+            },
+            "stall_max_ms": 18.8,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 0,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s2",
+            "target_rps": 6000,
+            "achieved_rps": 5999.5,
+            "requests": 47996,
+            "error_rate": 0,
+            "p50_ms": 0.113208,
+            "p90_ms": 0.2345835,
+            "p99_ms": 1.7629478999999983,
+            "max_ms": 18.883542,
+            "hold_start_offset_s": 24,
+            "hold_end_offset_s": 32,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.73275,
+              "gateway": 0.0019,
+              "demo": 0.28005,
+              "other": 0.05165,
+              "total": 1.0585
+            },
+            "stall_max_ms": 14.4,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 30,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s3",
+            "target_rps": 8000,
+            "achieved_rps": 7999.625,
+            "requests": 63997,
+            "error_rate": 0,
+            "p50_ms": 0.097542,
+            "p90_ms": 0.2022914,
+            "p99_ms": 1.1800266799999997,
+            "max_ms": 15.596958,
+            "hold_start_offset_s": 33,
+            "hold_end_offset_s": 41,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.76215,
+              "gateway": 0.0017000000000000001,
+              "demo": 0.2958,
+              "other": 0.04475,
+              "total": 1.1061
+            },
+            "stall_max_ms": 8.0,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 51,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s4",
+            "target_rps": 10000,
+            "achieved_rps": 9999.375,
+            "requests": 79995,
+            "error_rate": 0,
+            "p50_ms": 0.08225,
+            "p90_ms": 0.1885836,
+            "p99_ms": 1.0503825,
+            "max_ms": 10.976291,
+            "hold_start_offset_s": 42,
+            "hold_end_offset_s": 50,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.7947500000000001,
+              "gateway": 0.0015,
+              "demo": 0.3237,
+              "other": 0.07205,
+              "total": 1.1957
+            },
+            "stall_max_ms": 24.2,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 51,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s5",
+            "target_rps": 12000,
+            "achieved_rps": 11999.875,
+            "requests": 95999,
+            "error_rate": 0,
+            "p50_ms": 0.079875,
+            "p90_ms": 0.2847164000000001,
+            "p99_ms": 3.109417,
+            "max_ms": 81.765041,
+            "hold_start_offset_s": 51,
+            "hold_end_offset_s": 59,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.91125,
+              "gateway": 0.0016,
+              "demo": 0.37729999999999997,
+              "other": 0.07575,
+              "total": 1.3683
+            },
+            "stall_max_ms": 50.0,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 51,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s6",
+            "target_rps": 14000,
+            "achieved_rps": 14000.25,
+            "requests": 112002,
+            "error_rate": 0,
+            "p50_ms": 0.073625,
+            "p90_ms": 0.22975,
+            "p99_ms": 1.6954983399999999,
+            "max_ms": 8.007083,
+            "hold_start_offset_s": 60,
+            "hold_end_offset_s": 68,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 1.0329000000000002,
+              "gateway": 0.0016,
+              "demo": 0.42145,
+              "other": 0.06985,
+              "total": 1.5258
+            },
+            "stall_max_ms": 7.7,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 51,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s7",
+            "target_rps": 16000,
+            "achieved_rps": 16001.625,
+            "requests": 128013,
+            "error_rate": 0,
+            "p50_ms": 0.07125,
+            "p90_ms": 0.30923340000000027,
+            "p99_ms": 2.809826919999997,
+            "max_ms": 36.893459,
+            "hold_start_offset_s": 69,
+            "hold_end_offset_s": 77,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.993,
+              "gateway": 0.0015,
+              "demo": 0.4082,
+              "other": 0.0789,
+              "total": 1.4816
+            },
+            "stall_max_ms": 8.9,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 51,
+            "cpu_samples": 3,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          }
+        ],
+        "insufficient_vus_warnings": 0,
+        "run": 1
+      },
+      {
+        "test": "maxrps",
+        "target": "direct",
+        "url": "http://demo-1:8080/bare",
+        "criteria": {
+          "max_error_rate": 0.001,
+          "p99_ms_below": 50,
+          "min_achieved_fraction": 0.98,
+          "step_duration_s": 8,
+          "ramp_s": 1,
+          "warmup_s": 5
+        },
+        "shape": "ramping-arrival-rate, one scenario, connection-stable",
+        "start_epoch_ms": 1794846788958,
+        "summary_epoch_ms": 1794846866149,
+        "test_run_duration_ms": 77001.27116,
+        "dropped_iterations_total": 20,
+        "max_vus": 602,
+        "steps": [
+          {
+            "step": "s0",
+            "target_rps": 2000,
+            "achieved_rps": 2000.125,
+            "requests": 16001,
+            "error_rate": 0,
+            "p50_ms": 0.182459,
+            "p90_ms": 0.383083,
+            "p99_ms": 1.333167,
+            "max_ms": 6.292584,
+            "hold_start_offset_s": 6,
+            "hold_end_offset_s": 14,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.4544,
+              "gateway": 0.0032,
+              "demo": 0.22975,
+              "other": 0.043000000000000003,
+              "total": 0.7297
+            },
+            "stall_max_ms": 8.5,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 11,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s1",
+            "target_rps": 4000,
+            "achieved_rps": 4000.125,
+            "requests": 32001,
+            "error_rate": 0,
+            "p50_ms": 0.1445,
+            "p90_ms": 0.29675,
+            "p99_ms": 2.142042,
+            "max_ms": 50.110334,
+            "hold_start_offset_s": 15,
+            "hold_end_offset_s": 23,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.61225,
+              "gateway": 0.00215,
+              "demo": 0.2532,
+              "other": 0.033,
+              "total": 0.8977
+            },
+            "stall_max_ms": 31.3,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 11,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s2",
+            "target_rps": 6000,
+            "achieved_rps": 6000,
+            "requests": 48000,
+            "error_rate": 0,
+            "p50_ms": 0.114167,
+            "p90_ms": 0.22262910000000002,
+            "p99_ms": 0.8941740799999998,
+            "max_ms": 9.284541,
+            "hold_start_offset_s": 24,
+            "hold_end_offset_s": 32,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.67005,
+              "gateway": 0.00165,
+              "demo": 0.27985,
+              "other": 0.02685,
+              "total": 0.97855
+            },
+            "stall_max_ms": 6.3,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 11,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s3",
+            "target_rps": 8000,
+            "achieved_rps": 7999.25,
+            "requests": 63994,
+            "error_rate": 0,
+            "p50_ms": 0.1037915,
+            "p90_ms": 0.2293501000000001,
+            "p99_ms": 1.0268024999999996,
+            "max_ms": 6.484583,
+            "hold_start_offset_s": 33,
+            "hold_end_offset_s": 41,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.7561,
+              "gateway": 0.0012499999999999998,
+              "demo": 0.31775,
+              "other": 0.022850000000000002,
+              "total": 1.0979999999999999
+            },
+            "stall_max_ms": 8.6,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 11,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s4",
+            "target_rps": 10000,
+            "achieved_rps": 9998.25,
+            "requests": 79986,
+            "error_rate": 0,
+            "p50_ms": 0.086625,
+            "p90_ms": 0.24127050000000008,
+            "p99_ms": 14.551899949999992,
+            "max_ms": 92.847333,
+            "hold_start_offset_s": 42,
+            "hold_end_offset_s": 50,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.79285,
+              "gateway": 0.0012,
+              "demo": 0.35309999999999997,
+              "other": 0.021500000000000002,
+              "total": 1.1756000000000002
+            },
+            "stall_max_ms": 13.3,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 11,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s5",
+            "target_rps": 12000,
+            "achieved_rps": 11999.5,
+            "requests": 95996,
+            "error_rate": 0,
+            "p50_ms": 0.077875,
+            "p90_ms": 0.203542,
+            "p99_ms": 1.3236255999999993,
+            "max_ms": 5.763166,
+            "hold_start_offset_s": 51,
+            "hold_end_offset_s": 59,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.8599000000000001,
+              "gateway": 0.0012499999999999998,
+              "demo": 0.40225,
+              "other": 0.02265,
+              "total": 1.28525
+            },
+            "stall_max_ms": 4.2,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 0,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s6",
+            "target_rps": 14000,
+            "achieved_rps": 14000,
+            "requests": 112000,
+            "error_rate": 0,
+            "p50_ms": 0.073,
+            "p90_ms": 0.199666,
+            "p99_ms": 1.5830854999999997,
+            "max_ms": 11.455208,
+            "hold_start_offset_s": 60,
+            "hold_end_offset_s": 68,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.9885999999999999,
+              "gateway": 0.0010500000000000002,
+              "demo": 0.4317,
+              "other": 0.02195,
+              "total": 1.42305
+            },
+            "stall_max_ms": 2.6,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 0,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s7",
+            "target_rps": 16000,
+            "achieved_rps": 15998.625,
+            "requests": 127989,
+            "error_rate": 0,
+            "p50_ms": 0.068541,
+            "p90_ms": 0.228959,
+            "p99_ms": 1.5655919599999983,
+            "max_ms": 5.918583,
+            "hold_start_offset_s": 69,
+            "hold_end_offset_s": 77,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.9837,
+              "gateway": 0.0010999999999999998,
+              "demo": 0.42265,
+              "other": 0.05215,
+              "total": 1.4615
+            },
+            "stall_max_ms": 6.9,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 498,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          }
+        ],
+        "insufficient_vus_warnings": 0,
+        "run": 2
+      },
+      {
+        "test": "maxrps",
+        "target": "direct",
+        "url": "http://demo-1:8080/bare",
+        "criteria": {
+          "max_error_rate": 0.001,
+          "p99_ms_below": 50,
+          "min_achieved_fraction": 0.98,
+          "step_duration_s": 8,
+          "ramp_s": 1,
+          "warmup_s": 5
+        },
+        "shape": "ramping-arrival-rate, one scenario, connection-stable",
+        "start_epoch_ms": 1794846961774,
+        "summary_epoch_ms": 1794847038959,
+        "test_run_duration_ms": 77002.165828,
+        "dropped_iterations_total": 0,
+        "max_vus": 600,
+        "steps": [
+          {
+            "step": "s0",
+            "target_rps": 2000,
+            "achieved_rps": 2000.125,
+            "requests": 16001,
+            "error_rate": 0,
+            "p50_ms": 0.203125,
+            "p90_ms": 0.405708,
+            "p99_ms": 1.59475,
+            "max_ms": 26.523417,
+            "hold_start_offset_s": 6,
+            "hold_end_offset_s": 14,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.414,
+              "gateway": 0.0024000000000000002,
+              "demo": 0.2235,
+              "other": 0.07235,
+              "total": 0.71705
+            },
+            "stall_max_ms": 19.5,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 0,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s1",
+            "target_rps": 4000,
+            "achieved_rps": 4000,
+            "requests": 32000,
+            "error_rate": 0,
+            "p50_ms": 0.141083,
+            "p90_ms": 0.2921711,
+            "p99_ms": 1.1869852399999994,
+            "max_ms": 10.147709,
+            "hold_start_offset_s": 15,
+            "hold_end_offset_s": 23,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.6301,
+              "gateway": 0.002,
+              "demo": 0.24230000000000002,
+              "other": 0.0334,
+              "total": 0.9077999999999999
+            },
+            "stall_max_ms": 9.9,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 0,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s2",
+            "target_rps": 6000,
+            "achieved_rps": 6000,
+            "requests": 48000,
+            "error_rate": 0,
+            "p50_ms": 0.111833,
+            "p90_ms": 0.2085831,
+            "p99_ms": 1.0709621699999998,
+            "max_ms": 21.105333,
+            "hold_start_offset_s": 24,
+            "hold_end_offset_s": 32,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.70945,
+              "gateway": 0.0015500000000000002,
+              "demo": 0.28864999999999996,
+              "other": 0.026600000000000002,
+              "total": 1.02565
+            },
+            "stall_max_ms": 6.5,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 0,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s3",
+            "target_rps": 8000,
+            "achieved_rps": 7999.375,
+            "requests": 63995,
+            "error_rate": 0,
+            "p50_ms": 0.097333,
+            "p90_ms": 0.18877460000000004,
+            "p99_ms": 0.6495880399999999,
+            "max_ms": 6.882083,
+            "hold_start_offset_s": 33,
+            "hold_end_offset_s": 41,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.75925,
+              "gateway": 0.0010500000000000002,
+              "demo": 0.32375,
+              "other": 0.0235,
+              "total": 1.1069
+            },
+            "stall_max_ms": 7.2,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 0,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s4",
+            "target_rps": 10000,
+            "achieved_rps": 9999.375,
+            "requests": 79995,
+            "error_rate": 0,
+            "p50_ms": 0.084834,
+            "p90_ms": 0.20644160000000006,
+            "p99_ms": 1.3339929799999997,
+            "max_ms": 7.802042,
+            "hold_start_offset_s": 42,
+            "hold_end_offset_s": 50,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.8190000000000001,
+              "gateway": 0.00095,
+              "demo": 0.35124999999999995,
+              "other": 0.0224,
+              "total": 1.2186
+            },
+            "stall_max_ms": 10.2,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 0,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s5",
+            "target_rps": 12000,
+            "achieved_rps": 12000,
+            "requests": 96000,
+            "error_rate": 0,
+            "p50_ms": 0.0805,
+            "p90_ms": 0.224541,
+            "p99_ms": 1.4114655099999995,
+            "max_ms": 8.656709,
+            "hold_start_offset_s": 51,
+            "hold_end_offset_s": 59,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.86735,
+              "gateway": 0.001,
+              "demo": 0.41590000000000005,
+              "other": 0.02205,
+              "total": 1.3081999999999998
+            },
+            "stall_max_ms": 7.0,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 0,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s6",
+            "target_rps": 14000,
+            "achieved_rps": 14000.125,
+            "requests": 112001,
+            "error_rate": 0,
+            "p50_ms": 0.073042,
+            "p90_ms": 0.210333,
+            "p99_ms": 1.625667,
+            "max_ms": 7.593042,
+            "hold_start_offset_s": 60,
+            "hold_end_offset_s": 68,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.92245,
+              "gateway": 0.0009,
+              "demo": 0.4215,
+              "other": 0.02175,
+              "total": 1.3685
+            },
+            "stall_max_ms": 8.6,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 0,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s7",
+            "target_rps": 16000,
+            "achieved_rps": 15997.75,
+            "requests": 127982,
+            "error_rate": 0,
+            "p50_ms": 0.068917,
+            "p90_ms": 0.2269169,
+            "p99_ms": 1.9705317299999998,
+            "max_ms": 23.806625,
+            "hold_start_offset_s": 69,
+            "hold_end_offset_s": 77,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.9881,
+              "gateway": 0.0012499999999999998,
+              "demo": 0.41935,
+              "other": 0.02215,
+              "total": 1.42995
+            },
+            "stall_max_ms": 7.0,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 183,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          }
+        ],
+        "insufficient_vus_warnings": 0,
+        "run": 3
+      }
+    ],
+    "gateway": [
+      {
+        "test": "maxrps",
+        "target": "gateway",
+        "url": "http://gateway:8080/bare",
+        "criteria": {
+          "max_error_rate": 0.001,
+          "p99_ms_below": 50,
+          "min_achieved_fraction": 0.98,
+          "step_duration_s": 8,
+          "ramp_s": 1,
+          "warmup_s": 5
+        },
+        "shape": "ramping-arrival-rate, one scenario, connection-stable",
+        "start_epoch_ms": 1794846527511,
+        "summary_epoch_ms": 1794846604704,
+        "test_run_duration_ms": 77002.086633,
+        "dropped_iterations_total": 6323,
+        "max_vus": 644,
+        "steps": [
+          {
+            "step": "s0",
+            "target_rps": 2000,
+            "achieved_rps": 2000,
+            "requests": 16000,
+            "error_rate": 0,
+            "p50_ms": 0.2885,
+            "p90_ms": 0.5196785,
+            "p99_ms": 1.55775292,
+            "max_ms": 8.405959,
+            "hold_start_offset_s": 6,
+            "hold_end_offset_s": 14,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.31600000000000006,
+              "gateway": 0.28185,
+              "demo": 0.14500000000000002,
+              "other": 0.0667,
+              "total": 0.8316000000000001
+            },
+            "stall_max_ms": 7.5,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 51,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s1",
+            "target_rps": 4000,
+            "achieved_rps": 3999.5,
+            "requests": 31996,
+            "error_rate": 0,
+            "p50_ms": 0.200041,
+            "p90_ms": 0.3141665,
+            "p99_ms": 0.9653351,
+            "max_ms": 4.151416,
+            "hold_start_offset_s": 15,
+            "hold_end_offset_s": 23,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.38185,
+              "gateway": 0.36205,
+              "demo": 0.182,
+              "other": 0.0567,
+              "total": 0.98335
+            },
+            "stall_max_ms": 7.0,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 0,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s2",
+            "target_rps": 6000,
+            "achieved_rps": 5999.875,
+            "requests": 47999,
+            "error_rate": 0,
+            "p50_ms": 0.146416,
+            "p90_ms": 0.29313340000000004,
+            "p99_ms": 1.1938371799999998,
+            "max_ms": 13.482209,
+            "hold_start_offset_s": 24,
+            "hold_end_offset_s": 32,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.50165,
+              "gateway": 0.4174,
+              "demo": 0.2051,
+              "other": 0.02135,
+              "total": 1.14345
+            },
+            "stall_max_ms": 9.3,
+            "upstream_dials_per_s": 2.933333333333333,
+            "time_wait_peak": 0,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s3",
+            "target_rps": 8000,
+            "achieved_rps": 7999.375,
+            "requests": 63995,
+            "error_rate": 0,
+            "p50_ms": 0.130042,
+            "p90_ms": 0.306375,
+            "p99_ms": 4.798135499999986,
+            "max_ms": 22.374792,
+            "hold_start_offset_s": 33,
+            "hold_end_offset_s": 41,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.589,
+              "gateway": 0.49579999999999996,
+              "demo": 0.25615,
+              "other": 0.01735,
+              "total": 1.3706
+            },
+            "stall_max_ms": 7.4,
+            "upstream_dials_per_s": 18.133333333333333,
+            "time_wait_peak": 0,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s4",
+            "target_rps": 10000,
+            "achieved_rps": 9923.125,
+            "requests": 79385,
+            "error_rate": 0,
+            "p50_ms": 0.137208,
+            "p90_ms": 0.6263334000000004,
+            "p99_ms": 30.807093559999974,
+            "max_ms": 117.88475,
+            "hold_start_offset_s": 42,
+            "hold_end_offset_s": 50,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.7324,
+              "gateway": 0.6191500000000001,
+              "demo": 0.3047,
+              "other": 0.018349999999999998,
+              "total": 1.6709500000000002
+            },
+            "stall_max_ms": 76.5,
+            "upstream_dials_per_s": 66.66666666666667,
+            "time_wait_peak": 0,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s5",
+            "target_rps": 12000,
+            "achieved_rps": 12000,
+            "requests": 96000,
+            "error_rate": 0,
+            "p50_ms": 0.136834,
+            "p90_ms": 0.324167,
+            "p99_ms": 1.3291270799999997,
+            "max_ms": 13.14625,
+            "hold_start_offset_s": 51,
+            "hold_end_offset_s": 59,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.7444999999999999,
+              "gateway": 0.6656,
+              "demo": 0.32199999999999995,
+              "other": 0.0185,
+              "total": 1.7512999999999999
+            },
+            "stall_max_ms": 3.2,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 0,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s6",
+            "target_rps": 14000,
+            "achieved_rps": 13511.25,
+            "requests": 108090,
+            "error_rate": 0,
+            "p50_ms": 0.2,
+            "p90_ms": 1.7872336000000015,
+            "p99_ms": 48.06358675999995,
+            "max_ms": 182.404875,
+            "hold_start_offset_s": 60,
+            "hold_end_offset_s": 68,
+            "passes_k6": false,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 1.4968000000000001,
+              "gateway": 1.3214,
+              "demo": 0.6185,
+              "other": 0.0339,
+              "total": 3.499
+            },
+            "stall_max_ms": 92.9,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 0,
+            "cpu_samples": 3,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "fail"
+          },
+          {
+            "step": "s7",
+            "target_rps": 16000,
+            "achieved_rps": 15775.75,
+            "requests": 126206,
+            "error_rate": 0,
+            "p50_ms": 0.197625,
+            "p90_ms": 0.8565835000000003,
+            "p99_ms": 7.616202699999974,
+            "max_ms": 156.710583,
+            "hold_start_offset_s": 69,
+            "hold_end_offset_s": 77,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 1.1226500000000001,
+              "gateway": 0.91655,
+              "demo": 0.4297,
+              "other": 0.0234,
+              "total": 2.4923
+            },
+            "stall_max_ms": 52.0,
+            "upstream_dials_per_s": 22.4,
+            "time_wait_peak": 0,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          }
+        ],
+        "insufficient_vus_warnings": 0,
+        "run": 1
+      },
+      {
+        "test": "maxrps",
+        "target": "gateway",
+        "url": "http://gateway:8080/bare",
+        "criteria": {
+          "max_error_rate": 0.001,
+          "p99_ms_below": 50,
+          "min_achieved_fraction": 0.98,
+          "step_duration_s": 8,
+          "ramp_s": 1,
+          "warmup_s": 5
+        },
+        "shape": "ramping-arrival-rate, one scenario, connection-stable",
+        "start_epoch_ms": 1794846874709,
+        "summary_epoch_ms": 1794846951898,
+        "test_run_duration_ms": 77001.186911,
+        "dropped_iterations_total": 0,
+        "max_vus": 600,
+        "steps": [
+          {
+            "step": "s0",
+            "target_rps": 2000,
+            "achieved_rps": 2000.125,
+            "requests": 16001,
+            "error_rate": 0,
+            "p50_ms": 0.271458,
+            "p90_ms": 0.421167,
+            "p99_ms": 1.160042,
+            "max_ms": 5.039208,
+            "hold_start_offset_s": 6,
+            "hold_end_offset_s": 14,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.3449,
+              "gateway": 0.33344999999999997,
+              "demo": 0.17204999999999998,
+              "other": 0.031099999999999996,
+              "total": 0.89325
+            },
+            "stall_max_ms": 7.0,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 650,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s1",
+            "target_rps": 4000,
+            "achieved_rps": 4000.25,
+            "requests": 32002,
+            "error_rate": 0,
+            "p50_ms": 0.196375,
+            "p90_ms": 0.3184169,
+            "p99_ms": 1.26395357,
+            "max_ms": 34.055334,
+            "hold_start_offset_s": 15,
+            "hold_end_offset_s": 23,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.48775,
+              "gateway": 0.36235,
+              "demo": 0.187,
+              "other": 0.0242,
+              "total": 1.06095
+            },
+            "stall_max_ms": 12.9,
+            "upstream_dials_per_s": 2.2666666666666666,
+            "time_wait_peak": 650,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s2",
+            "target_rps": 6000,
+            "achieved_rps": 6000.25,
+            "requests": 48002,
+            "error_rate": 0,
+            "p50_ms": 0.153458,
+            "p90_ms": 0.306583,
+            "p99_ms": 10.737852419999891,
+            "max_ms": 90.544459,
+            "hold_start_offset_s": 24,
+            "hold_end_offset_s": 32,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.53095,
+              "gateway": 0.415,
+              "demo": 0.1998,
+              "other": 0.04820000000000001,
+              "total": 1.1872
+            },
+            "stall_max_ms": 9.2,
+            "upstream_dials_per_s": 5.466666666666667,
+            "time_wait_peak": 650,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s3",
+            "target_rps": 8000,
+            "achieved_rps": 8000.125,
+            "requests": 64001,
+            "error_rate": 0,
+            "p50_ms": 0.126833,
+            "p90_ms": 0.237541,
+            "p99_ms": 0.827583,
+            "max_ms": 4.615833,
+            "hold_start_offset_s": 33,
+            "hold_end_offset_s": 41,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.5991500000000001,
+              "gateway": 0.49834999999999996,
+              "demo": 0.24485,
+              "other": 0.0421,
+              "total": 1.38565
+            },
+            "stall_max_ms": 3.7,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 650,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s4",
+            "target_rps": 10000,
+            "achieved_rps": 10000,
+            "requests": 80000,
+            "error_rate": 0,
+            "p50_ms": 0.125583,
+            "p90_ms": 0.26675410000000005,
+            "p99_ms": 1.2896664199999999,
+            "max_ms": 21.64925,
+            "hold_start_offset_s": 42,
+            "hold_end_offset_s": 50,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.6527499999999999,
+              "gateway": 0.5849500000000001,
+              "demo": 0.27875000000000005,
+              "other": 0.0448,
+              "total": 1.5606
+            },
+            "stall_max_ms": 7.8,
+            "upstream_dials_per_s": 2.4,
+            "time_wait_peak": 650,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s5",
+            "target_rps": 12000,
+            "achieved_rps": 11999.875,
+            "requests": 95999,
+            "error_rate": 0,
+            "p50_ms": 0.135083,
+            "p90_ms": 0.307625,
+            "p99_ms": 1.3112104999999998,
+            "max_ms": 6.306833,
+            "hold_start_offset_s": 51,
+            "hold_end_offset_s": 59,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.7456499999999999,
+              "gateway": 0.66,
+              "demo": 0.30765,
+              "other": 0.04525,
+              "total": 1.7785
+            },
+            "stall_max_ms": 6.0,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 182,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s6",
+            "target_rps": 14000,
+            "achieved_rps": 14000.125,
+            "requests": 112001,
+            "error_rate": 0,
+            "p50_ms": 0.155583,
+            "p90_ms": 0.4085,
+            "p99_ms": 1.843208,
+            "max_ms": 10.615,
+            "hold_start_offset_s": 60,
+            "hold_end_offset_s": 68,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.8772,
+              "gateway": 0.7436499999999999,
+              "demo": 0.35205000000000003,
+              "other": 0.0485,
+              "total": 2.01005
+            },
+            "stall_max_ms": 12.0,
+            "upstream_dials_per_s": 12.933333333333334,
+            "time_wait_peak": 0,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s7",
+            "target_rps": 16000,
+            "achieved_rps": 15999.5,
+            "requests": 127996,
+            "error_rate": 0,
+            "p50_ms": 0.173125,
+            "p90_ms": 0.513917,
+            "p99_ms": 2.9135752999999993,
+            "max_ms": 25.717333,
+            "hold_start_offset_s": 69,
+            "hold_end_offset_s": 77,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.96475,
+              "gateway": 0.83165,
+              "demo": 0.39444999999999997,
+              "other": 0.04755000000000001,
+              "total": 2.2375499999999997
+            },
+            "stall_max_ms": 7.1,
+            "upstream_dials_per_s": 25.2,
+            "time_wait_peak": 0,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          }
+        ],
+        "insufficient_vus_warnings": 0,
+        "run": 2
+      },
+      {
+        "test": "maxrps",
+        "target": "gateway",
+        "url": "http://gateway:8080/bare",
+        "criteria": {
+          "max_error_rate": 0.001,
+          "p99_ms_below": 50,
+          "min_achieved_fraction": 0.98,
+          "step_duration_s": 8,
+          "ramp_s": 1,
+          "warmup_s": 5
+        },
+        "shape": "ramping-arrival-rate, one scenario, connection-stable",
+        "start_epoch_ms": 1794847136427,
+        "summary_epoch_ms": 1794847213615,
+        "test_run_duration_ms": 77001.714327,
+        "dropped_iterations_total": 588,
+        "max_vus": 607,
+        "steps": [
+          {
+            "step": "s0",
+            "target_rps": 2000,
+            "achieved_rps": 2000.25,
+            "requests": 16002,
+            "error_rate": 0,
+            "p50_ms": 0.27475,
+            "p90_ms": 0.45278779999999996,
+            "p99_ms": 1.37157967,
+            "max_ms": 3.738792,
+            "hold_start_offset_s": 6,
+            "hold_end_offset_s": 14,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.38095,
+              "gateway": 0.33030000000000004,
+              "demo": 0.14875,
+              "other": 0.056100000000000004,
+              "total": 0.90875
+            },
+            "stall_max_ms": 7.3,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 0,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s1",
+            "target_rps": 4000,
+            "achieved_rps": 4000.375,
+            "requests": 32003,
+            "error_rate": 0,
+            "p50_ms": 0.194125,
+            "p90_ms": 0.298792,
+            "p99_ms": 0.9232149999999996,
+            "max_ms": 6.4595,
+            "hold_start_offset_s": 15,
+            "hold_end_offset_s": 23,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.39244999999999997,
+              "gateway": 0.3768,
+              "demo": 0.17504999999999998,
+              "other": 0.043649999999999994,
+              "total": 0.9884499999999999
+            },
+            "stall_max_ms": 8.6,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 0,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s2",
+            "target_rps": 6000,
+            "achieved_rps": 6000.125,
+            "requests": 48001,
+            "error_rate": 0,
+            "p50_ms": 0.155708,
+            "p90_ms": 0.309,
+            "p99_ms": 1.238583,
+            "max_ms": 10.504833,
+            "hold_start_offset_s": 24,
+            "hold_end_offset_s": 32,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.4892,
+              "gateway": 0.41845000000000004,
+              "demo": 0.18935,
+              "other": 0.03609999999999999,
+              "total": 1.1289500000000001
+            },
+            "stall_max_ms": 4.7,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 0,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s3",
+            "target_rps": 8000,
+            "achieved_rps": 8000,
+            "requests": 64000,
+            "error_rate": 0,
+            "p50_ms": 0.1285,
+            "p90_ms": 0.286667,
+            "p99_ms": 14.085632329999997,
+            "max_ms": 54.779,
+            "hold_start_offset_s": 33,
+            "hold_end_offset_s": 41,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.59605,
+              "gateway": 0.50295,
+              "demo": 0.23020000000000002,
+              "other": 0.0296,
+              "total": 1.3567
+            },
+            "stall_max_ms": 28.7,
+            "upstream_dials_per_s": 58.93333333333333,
+            "time_wait_peak": 0,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s4",
+            "target_rps": 10000,
+            "achieved_rps": 9999.25,
+            "requests": 79994,
+            "error_rate": 0,
+            "p50_ms": 0.126833,
+            "p90_ms": 0.276375,
+            "p99_ms": 1.19430362,
+            "max_ms": 6.444,
+            "hold_start_offset_s": 42,
+            "hold_end_offset_s": 50,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.6444,
+              "gateway": 0.5713,
+              "demo": 0.26589999999999997,
+              "other": 0.030399999999999996,
+              "total": 1.5094
+            },
+            "stall_max_ms": 6.9,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 6,
+            "cpu_samples": 3,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s5",
+            "target_rps": 12000,
+            "achieved_rps": 12000.125,
+            "requests": 96001,
+            "error_rate": 0,
+            "p50_ms": 0.141667,
+            "p90_ms": 0.373209,
+            "p99_ms": 2.35375,
+            "max_ms": 11.629375,
+            "hold_start_offset_s": 51,
+            "hold_end_offset_s": 59,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.7805,
+              "gateway": 0.678,
+              "demo": 0.3033,
+              "other": 0.0344,
+              "total": 1.801
+            },
+            "stall_max_ms": 5.9,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 6,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s6",
+            "target_rps": 14000,
+            "achieved_rps": 14000,
+            "requests": 112000,
+            "error_rate": 0,
+            "p50_ms": 0.155167,
+            "p90_ms": 0.432875,
+            "p99_ms": 3.261203089999996,
+            "max_ms": 31.312708,
+            "hold_start_offset_s": 60,
+            "hold_end_offset_s": 68,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.95875,
+              "gateway": 0.7623,
+              "demo": 0.34539999999999993,
+              "other": 0.03695,
+              "total": 2.1033999999999997
+            },
+            "stall_max_ms": 20.0,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 6,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s7",
+            "target_rps": 16000,
+            "achieved_rps": 15926.625,
+            "requests": 127413,
+            "error_rate": 0,
+            "p50_ms": 0.195166,
+            "p90_ms": 0.9537334000000003,
+            "p99_ms": 23.711588,
+            "max_ms": 113.138042,
+            "hold_start_offset_s": 69,
+            "hold_end_offset_s": 77,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 1.0285,
+              "gateway": 0.8655999999999999,
+              "demo": 0.38644999999999996,
+              "other": 0.0366,
+              "total": 2.31715
+            },
+            "stall_max_ms": 38.5,
+            "upstream_dials_per_s": 27.466666666666665,
+            "time_wait_peak": 6,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          }
+        ],
+        "insufficient_vus_warnings": 0,
+        "run": 3
+      }
+    ],
+    "gateway3": [
+      {
+        "test": "maxrps",
+        "target": "gateway3",
+        "url": "http://gateway:8080/bare3",
+        "criteria": {
+          "max_error_rate": 0.001,
+          "p99_ms_below": 50,
+          "min_achieved_fraction": 0.98,
+          "step_duration_s": 8,
+          "ramp_s": 1,
+          "warmup_s": 5
+        },
+        "shape": "ramping-arrival-rate, one scenario, connection-stable",
+        "start_epoch_ms": 1794846614324,
+        "summary_epoch_ms": 1794846691513,
+        "test_run_duration_ms": 77002.475175,
+        "dropped_iterations_total": 1036,
+        "max_vus": 633,
+        "steps": [
+          {
+            "step": "s0",
+            "target_rps": 2000,
+            "achieved_rps": 2000.25,
+            "requests": 16002,
+            "error_rate": 0,
+            "p50_ms": 0.285708,
+            "p90_ms": 0.4451619,
+            "p99_ms": 1.7002461699999993,
+            "max_ms": 8.617875,
+            "hold_start_offset_s": 6,
+            "hold_end_offset_s": 14,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.3493,
+              "gateway": 0.32549999999999996,
+              "demo": 0.1961,
+              "other": 0.0352,
+              "total": 0.948
+            },
+            "stall_max_ms": 8.2,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 0,
+            "cpu_samples": 3,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s1",
+            "target_rps": 4000,
+            "achieved_rps": 3999.375,
+            "requests": 31995,
+            "error_rate": 0,
+            "p50_ms": 0.200708,
+            "p90_ms": 0.3260252,
+            "p99_ms": 1.0922350399999994,
+            "max_ms": 5.394541,
+            "hold_start_offset_s": 15,
+            "hold_end_offset_s": 23,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.481,
+              "gateway": 0.36995,
+              "demo": 0.2224,
+              "other": 0.02495,
+              "total": 1.08805
+            },
+            "stall_max_ms": 7.6,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 0,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s2",
+            "target_rps": 6000,
+            "achieved_rps": 6000.375,
+            "requests": 48003,
+            "error_rate": 0,
+            "p50_ms": 0.145459,
+            "p90_ms": 0.279792,
+            "p99_ms": 0.8822843599999999,
+            "max_ms": 3.725375,
+            "hold_start_offset_s": 24,
+            "hold_end_offset_s": 32,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.4769,
+              "gateway": 0.41305,
+              "demo": 0.236,
+              "other": 0.05195,
+              "total": 1.18145
+            },
+            "stall_max_ms": 3.7,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 0,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s3",
+            "target_rps": 8000,
+            "achieved_rps": 8000.125,
+            "requests": 64001,
+            "error_rate": 0,
+            "p50_ms": 0.128,
+            "p90_ms": 0.233083,
+            "p99_ms": 0.789208,
+            "max_ms": 8.535542,
+            "hold_start_offset_s": 33,
+            "hold_end_offset_s": 41,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.59755,
+              "gateway": 0.5083,
+              "demo": 0.30335,
+              "other": 0.0431,
+              "total": 1.44715
+            },
+            "stall_max_ms": 6.7,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 0,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s4",
+            "target_rps": 10000,
+            "achieved_rps": 9999.875,
+            "requests": 79999,
+            "error_rate": 0,
+            "p50_ms": 0.127125,
+            "p90_ms": 0.262542,
+            "p99_ms": 1.157360499999999,
+            "max_ms": 20.386583,
+            "hold_start_offset_s": 42,
+            "hold_end_offset_s": 50,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.6514500000000001,
+              "gateway": 0.5871,
+              "demo": 0.34605,
+              "other": 0.04475,
+              "total": 1.62995
+            },
+            "stall_max_ms": 6.6,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 0,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s5",
+            "target_rps": 12000,
+            "achieved_rps": 12000.25,
+            "requests": 96002,
+            "error_rate": 0,
+            "p50_ms": 0.139209,
+            "p90_ms": 0.3097039000000001,
+            "p99_ms": 1.4074363399999983,
+            "max_ms": 10.890708,
+            "hold_start_offset_s": 51,
+            "hold_end_offset_s": 59,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.7427000000000001,
+              "gateway": 0.6756,
+              "demo": 0.39695,
+              "other": 0.0468,
+              "total": 1.8642500000000002
+            },
+            "stall_max_ms": 6.6,
+            "upstream_dials_per_s": 7.2,
+            "time_wait_peak": 0,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s6",
+            "target_rps": 14000,
+            "achieved_rps": 14000,
+            "requests": 112000,
+            "error_rate": 0,
+            "p50_ms": 0.156875,
+            "p90_ms": 0.382875,
+            "p99_ms": 1.9308770799999997,
+            "max_ms": 15.697709,
+            "hold_start_offset_s": 60,
+            "hold_end_offset_s": 68,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.895,
+              "gateway": 0.7728999999999999,
+              "demo": 0.46209999999999996,
+              "other": 0.049499999999999995,
+              "total": 2.17645
+            },
+            "stall_max_ms": 11.3,
+            "upstream_dials_per_s": 6.533333333333333,
+            "time_wait_peak": 0,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s7",
+            "target_rps": 16000,
+            "achieved_rps": 15870,
+            "requests": 126960,
+            "error_rate": 0,
+            "p50_ms": 0.192709,
+            "p90_ms": 0.7261786000000003,
+            "p99_ms": 19.72726602999995,
+            "max_ms": 160.313417,
+            "hold_start_offset_s": 69,
+            "hold_end_offset_s": 77,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 1.0528499999999998,
+              "gateway": 0.88315,
+              "demo": 0.5261,
+              "other": 0.04875,
+              "total": 2.5058499999999997
+            },
+            "stall_max_ms": 15.5,
+            "upstream_dials_per_s": 59.6,
+            "time_wait_peak": 386,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          }
+        ],
+        "insufficient_vus_warnings": 0,
+        "run": 1
+      },
+      {
+        "test": "maxrps",
+        "target": "gateway3",
+        "url": "http://gateway:8080/bare3",
+        "criteria": {
+          "max_error_rate": 0.001,
+          "p99_ms_below": 50,
+          "min_achieved_fraction": 0.98,
+          "step_duration_s": 8,
+          "ramp_s": 1,
+          "warmup_s": 5
+        },
+        "shape": "ramping-arrival-rate, one scenario, connection-stable",
+        "start_epoch_ms": 1794846701294,
+        "summary_epoch_ms": 1794846778480,
+        "test_run_duration_ms": 77001.176286,
+        "dropped_iterations_total": 701,
+        "max_vus": 650,
+        "steps": [
+          {
+            "step": "s0",
+            "target_rps": 2000,
+            "achieved_rps": 2000,
+            "requests": 16000,
+            "error_rate": 0,
+            "p50_ms": 0.2964375,
+            "p90_ms": 0.4553372,
+            "p99_ms": 1.2724269999999998,
+            "max_ms": 9.057917,
+            "hold_start_offset_s": 6,
+            "hold_end_offset_s": 14,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.3503,
+              "gateway": 0.3231,
+              "demo": 0.1954,
+              "other": 0.034999999999999996,
+              "total": 0.9504
+            },
+            "stall_max_ms": 8.1,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 442,
+            "cpu_samples": 3,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s1",
+            "target_rps": 4000,
+            "achieved_rps": 4000.125,
+            "requests": 32001,
+            "error_rate": 0,
+            "p50_ms": 0.201,
+            "p90_ms": 0.3215,
+            "p99_ms": 0.85375,
+            "max_ms": 7.426458,
+            "hold_start_offset_s": 15,
+            "hold_end_offset_s": 23,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.40085000000000004,
+              "gateway": 0.38225,
+              "demo": 0.22660000000000002,
+              "other": 0.02395,
+              "total": 1.0327000000000002
+            },
+            "stall_max_ms": 7.7,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 442,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s2",
+            "target_rps": 6000,
+            "achieved_rps": 5999.75,
+            "requests": 47998,
+            "error_rate": 0,
+            "p50_ms": 0.1454165,
+            "p90_ms": 0.2796793,
+            "p99_ms": 1.05333801,
+            "max_ms": 11.935083,
+            "hold_start_offset_s": 24,
+            "hold_end_offset_s": 32,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.5273,
+              "gateway": 0.42325,
+              "demo": 0.24185,
+              "other": 0.02155,
+              "total": 1.2081
+            },
+            "stall_max_ms": 6.5,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 442,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s3",
+            "target_rps": 8000,
+            "achieved_rps": 8000,
+            "requests": 64000,
+            "error_rate": 0,
+            "p50_ms": 0.128708,
+            "p90_ms": 0.23850410000000005,
+            "p99_ms": 0.8141270899999998,
+            "max_ms": 6.634708,
+            "hold_start_offset_s": 33,
+            "hold_end_offset_s": 41,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.60625,
+              "gateway": 0.519,
+              "demo": 0.3099,
+              "other": 0.0165,
+              "total": 1.4513
+            },
+            "stall_max_ms": 7.2,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 442,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s4",
+            "target_rps": 10000,
+            "achieved_rps": 10000.125,
+            "requests": 80001,
+            "error_rate": 0,
+            "p50_ms": 0.128,
+            "p90_ms": 0.270042,
+            "p99_ms": 1.365459,
+            "max_ms": 21.414541,
+            "hold_start_offset_s": 42,
+            "hold_end_offset_s": 50,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.6625000000000001,
+              "gateway": 0.6010500000000001,
+              "demo": 0.36265000000000003,
+              "other": 0.0169,
+              "total": 1.6431499999999999
+            },
+            "stall_max_ms": 5.9,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 442,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s5",
+            "target_rps": 12000,
+            "achieved_rps": 12000,
+            "requests": 96000,
+            "error_rate": 0,
+            "p50_ms": 0.142916,
+            "p90_ms": 0.3358381000000001,
+            "p99_ms": 1.4287583299999993,
+            "max_ms": 10.69575,
+            "hold_start_offset_s": 51,
+            "hold_end_offset_s": 59,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.7778,
+              "gateway": 0.7074499999999999,
+              "demo": 0.42245000000000005,
+              "other": 0.019100000000000002,
+              "total": 1.9267
+            },
+            "stall_max_ms": 5.7,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 56,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s6",
+            "target_rps": 14000,
+            "achieved_rps": 13999.75,
+            "requests": 111998,
+            "error_rate": 0,
+            "p50_ms": 0.160291,
+            "p90_ms": 0.411416,
+            "p99_ms": 2.111868979999999,
+            "max_ms": 8.925958,
+            "hold_start_offset_s": 60,
+            "hold_end_offset_s": 68,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.90265,
+              "gateway": 0.7753,
+              "demo": 0.47145000000000004,
+              "other": 0.020999999999999998,
+              "total": 2.1699
+            },
+            "stall_max_ms": 54.8,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 0,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s7",
+            "target_rps": 16000,
+            "achieved_rps": 16001.25,
+            "requests": 128010,
+            "error_rate": 0,
+            "p50_ms": 0.185583,
+            "p90_ms": 0.5242667000000004,
+            "p99_ms": 5.3593823099999955,
+            "max_ms": 26.89,
+            "hold_start_offset_s": 69,
+            "hold_end_offset_s": 77,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 1.06415,
+              "gateway": 0.87185,
+              "demo": 0.5354,
+              "other": 0.0208,
+              "total": 2.4890499999999998
+            },
+            "stall_max_ms": 7.1,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 11,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          }
+        ],
+        "insufficient_vus_warnings": 0,
+        "run": 2
+      },
+      {
+        "test": "maxrps",
+        "target": "gateway3",
+        "url": "http://gateway:8080/bare3",
+        "criteria": {
+          "max_error_rate": 0.001,
+          "p99_ms_below": 50,
+          "min_achieved_fraction": 0.98,
+          "step_duration_s": 8,
+          "ramp_s": 1,
+          "warmup_s": 5
+        },
+        "shape": "ramping-arrival-rate, one scenario, connection-stable",
+        "start_epoch_ms": 1794847049400,
+        "summary_epoch_ms": 1794847126591,
+        "test_run_duration_ms": 77001.644369,
+        "dropped_iterations_total": 0,
+        "max_vus": 600,
+        "steps": [
+          {
+            "step": "s0",
+            "target_rps": 2000,
+            "achieved_rps": 2000.375,
+            "requests": 16003,
+            "error_rate": 0,
+            "p50_ms": 0.292666,
+            "p90_ms": 0.5436252,
+            "p99_ms": 2.0576866599999994,
+            "max_ms": 13.048125,
+            "hold_start_offset_s": 6,
+            "hold_end_offset_s": 14,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.3769,
+              "gateway": 0.32284999999999997,
+              "demo": 0.2027,
+              "other": 0.03165,
+              "total": 0.95045
+            },
+            "stall_max_ms": 13.0,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 244,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s1",
+            "target_rps": 4000,
+            "achieved_rps": 4001,
+            "requests": 32008,
+            "error_rate": 0,
+            "p50_ms": 0.21056249999999999,
+            "p90_ms": 0.338667,
+            "p99_ms": 1.1983315099999996,
+            "max_ms": 7.797667,
+            "hold_start_offset_s": 15,
+            "hold_end_offset_s": 23,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.4734,
+              "gateway": 0.3598,
+              "demo": 0.21250000000000002,
+              "other": 0.02345,
+              "total": 1.06735
+            },
+            "stall_max_ms": 7.7,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 244,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s2",
+            "target_rps": 6000,
+            "achieved_rps": 6000.5,
+            "requests": 48004,
+            "error_rate": 0,
+            "p50_ms": 0.146666,
+            "p90_ms": 0.2829457,
+            "p99_ms": 0.9834044899999999,
+            "max_ms": 8.544834,
+            "hold_start_offset_s": 24,
+            "hold_end_offset_s": 32,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.53585,
+              "gateway": 0.42325,
+              "demo": 0.24345,
+              "other": 0.0217,
+              "total": 1.22385
+            },
+            "stall_max_ms": 7.6,
+            "upstream_dials_per_s": 1.6,
+            "time_wait_peak": 244,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s3",
+            "target_rps": 8000,
+            "achieved_rps": 8000.125,
+            "requests": 64001,
+            "error_rate": 0,
+            "p50_ms": 0.128333,
+            "p90_ms": 0.2485,
+            "p99_ms": 0.941292,
+            "max_ms": 7.293167,
+            "hold_start_offset_s": 33,
+            "hold_end_offset_s": 41,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.60045,
+              "gateway": 0.5057,
+              "demo": 0.30405,
+              "other": 0.01655,
+              "total": 1.4298
+            },
+            "stall_max_ms": 8.7,
+            "upstream_dials_per_s": 1.8666666666666667,
+            "time_wait_peak": 244,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s4",
+            "target_rps": 10000,
+            "achieved_rps": 9999.5,
+            "requests": 79996,
+            "error_rate": 0,
+            "p50_ms": 0.127792,
+            "p90_ms": 0.277792,
+            "p99_ms": 1.5891687499999976,
+            "max_ms": 16.872375,
+            "hold_start_offset_s": 42,
+            "hold_end_offset_s": 50,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.6697,
+              "gateway": 0.5966499999999999,
+              "demo": 0.34520000000000006,
+              "other": 0.0437,
+              "total": 1.65585
+            },
+            "stall_max_ms": 7.2,
+            "upstream_dials_per_s": 20.663911478469537,
+            "time_wait_peak": 244,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s5",
+            "target_rps": 12000,
+            "achieved_rps": 11999.125,
+            "requests": 95993,
+            "error_rate": 0,
+            "p50_ms": 0.139458,
+            "p90_ms": 0.3292416000000001,
+            "p99_ms": 1.8270547199999991,
+            "max_ms": 9.803667,
+            "hold_start_offset_s": 51,
+            "hold_end_offset_s": 59,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.7623500000000001,
+              "gateway": 0.6820999999999999,
+              "demo": 0.40535,
+              "other": 0.04715,
+              "total": 1.89745
+            },
+            "stall_max_ms": 7.3,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 47,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s6",
+            "target_rps": 14000,
+            "achieved_rps": 13999.25,
+            "requests": 111994,
+            "error_rate": 0,
+            "p50_ms": 0.156125,
+            "p90_ms": 0.3849877000000001,
+            "p99_ms": 1.73608594,
+            "max_ms": 11.797042,
+            "hold_start_offset_s": 60,
+            "hold_end_offset_s": 68,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 0.89645,
+              "gateway": 0.7621,
+              "demo": 0.45305,
+              "other": 0.04844999999999999,
+              "total": 2.1642
+            },
+            "stall_max_ms": 7.0,
+            "upstream_dials_per_s": 0.0,
+            "time_wait_peak": 0,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          },
+          {
+            "step": "s7",
+            "target_rps": 16000,
+            "achieved_rps": 15999.75,
+            "requests": 127998,
+            "error_rate": 0,
+            "p50_ms": 0.174125,
+            "p90_ms": 0.470041,
+            "p99_ms": 2.195561229999998,
+            "max_ms": 16.100417,
+            "hold_start_offset_s": 69,
+            "hold_end_offset_s": 77,
+            "passes_k6": true,
+            "labels": [],
+            "cpu_cores": {
+              "k6": 1.0226,
+              "gateway": 0.8485,
+              "demo": 0.5201500000000001,
+              "other": 0.04825,
+              "total": 2.4349
+            },
+            "stall_max_ms": 6.4,
+            "upstream_dials_per_s": 0.13333333333333333,
+            "time_wait_peak": 0,
+            "cpu_samples": 4,
+            "insufficient_vus": false,
+            "gateway_cpuset_saturated": false,
+            "status": "pass"
+          }
+        ],
+        "insufficient_vus_warnings": 0,
+        "run": 3
+      }
+    ]
+  },
+  "failover": {
+    "active-fail500": [
+      {
+        "test": "failover",
+        "id": "active-fail500-r1",
+        "path": "/fo-active",
+        "mode": "fail500",
+        "rate_rps": 200,
+        "victim": "demo-1",
+        "fault_s": 24.5,
+        "requests": 8801,
+        "failed": 5,
+        "failed_by_status": {
+          "500": 5
+        },
+        "failed_before_fault": 0,
+        "failed_during_fault": 5,
+        "failed_after_restore": 0,
+        "failure_window": {
+          "first_offset_s": 0.01,
+          "last_offset_s": 20.051,
+          "span_s": 20.041
+        },
+        "failure_clusters": [
+          {
+            "start_offset_s": 0.01,
+            "end_offset_s": 0.041,
+            "visible_end_offset_s": 0.04189990234375,
+            "count": 3,
+            "max_latency_ms": 0.9
+          },
+          {
+            "start_offset_s": 10.045,
+            "end_offset_s": 10.045,
+            "visible_end_offset_s": 10.04610009765625,
+            "count": 1,
+            "max_latency_ms": 1.1
+          },
+          {
+            "start_offset_s": 20.051,
+            "end_offset_s": 20.051,
+            "visible_end_offset_s": 20.051800048828124,
+            "count": 1,
+            "max_latency_ms": 0.8
+          }
+        ],
+        "first_failure_offset_s": 0.01,
+        "failover_time_s": 0.04189990234375,
+        "failover_failed_requests": 3,
+        "failover_max_latency_ms": 0.9,
+        "reprobe_failures": 2,
+        "reprobe_clusters": 2,
+        "reprobe_failures_per_cooloff": 0.8163265306122448,
+        "failed_after_first_cluster": 2,
+        "victim_served_before_fault": 267,
+        "recovery_s": 5.551,
+        "recovery_note": "first 200 served by the victim after restore",
+        "fault_start_ms": 1794847969711.0,
+        "restore_ms": 1794847994214.0,
+        "log_span_s": 43.999,
+        "case": "active-fail500",
+        "config": "active",
+        "run": 1,
+        "seed": "291927372"
+      },
+      {
+        "test": "failover",
+        "id": "active-fail500-r2",
+        "path": "/fo-active",
+        "mode": "fail500",
+        "rate_rps": 200,
+        "victim": "demo-1",
+        "fault_s": 15.3,
+        "requests": 7001,
+        "failed": 4,
+        "failed_by_status": {
+          "500": 4
+        },
+        "failed_before_fault": 0,
+        "failed_during_fault": 4,
+        "failed_after_restore": 0,
+        "failure_window": {
+          "first_offset_s": 0.009,
+          "last_offset_s": 10.044,
+          "span_s": 10.035
+        },
+        "failure_clusters": [
+          {
+            "start_offset_s": 0.009,
+            "end_offset_s": 0.039,
+            "visible_end_offset_s": 0.03989990234375,
+            "count": 3,
+            "max_latency_ms": 0.9
+          },
+          {
+            "start_offset_s": 10.044,
+            "end_offset_s": 10.044,
+            "visible_end_offset_s": 10.045,
+            "count": 1,
+            "max_latency_ms": 1.0
+          }
+        ],
+        "first_failure_offset_s": 0.009,
+        "failover_time_s": 0.03989990234375,
+        "failover_failed_requests": 3,
+        "failover_max_latency_ms": 0.9,
+        "reprobe_failures": 1,
+        "reprobe_clusters": 1,
+        "reprobe_failures_per_cooloff": 0.6535947712418301,
+        "failed_after_first_cluster": 1,
+        "victim_served_before_fault": 267,
+        "recovery_s": 4.748,
+        "recovery_note": "first 200 served by the victim after restore",
+        "fault_start_ms": 1794848015049.0,
+        "restore_ms": 1794848030351.0,
+        "log_span_s": 35.002,
+        "case": "active-fail500",
+        "config": "active",
+        "run": 2,
+        "seed": "291927372"
+      },
+      {
+        "test": "failover",
+        "id": "active-fail500-r3",
+        "path": "/fo-active",
+        "mode": "fail500",
+        "rate_rps": 200,
+        "victim": "demo-1",
+        "fault_s": 16.7,
+        "requests": 7200,
+        "failed": 4,
+        "failed_by_status": {
+          "500": 4
+        },
+        "failed_before_fault": 0,
+        "failed_during_fault": 4,
+        "failed_after_restore": 0,
+        "failure_window": {
+          "first_offset_s": 0.01,
+          "last_offset_s": 10.045,
+          "span_s": 10.035
+        },
+        "failure_clusters": [
+          {
+            "start_offset_s": 0.01,
+            "end_offset_s": 0.039,
+            "visible_end_offset_s": 0.03989990234375,
+            "count": 3,
+            "max_latency_ms": 0.9
+          },
+          {
+            "start_offset_s": 10.045,
+            "end_offset_s": 10.045,
+            "visible_end_offset_s": 10.0455,
+            "count": 1,
+            "max_latency_ms": 0.5
+          }
+        ],
+        "first_failure_offset_s": 0.01,
+        "failover_time_s": 0.03989990234375,
+        "failover_failed_requests": 3,
+        "failover_max_latency_ms": 0.9,
+        "reprobe_failures": 1,
+        "reprobe_clusters": 1,
+        "reprobe_failures_per_cooloff": 0.5988023952095809,
+        "failed_after_first_cluster": 1,
+        "victim_served_before_fault": 267,
+        "recovery_s": 3.349,
+        "recovery_note": "first 200 served by the victim after restore",
+        "fault_start_ms": 1794848051235.0,
+        "restore_ms": 1794848067937.0,
+        "log_span_s": 35.995,
+        "case": "active-fail500",
+        "config": "active",
+        "run": 3,
+        "seed": "291927372"
+      }
+    ],
+    "active-kill": [
+      {
+        "test": "failover",
+        "id": "active-kill-r1",
+        "path": "/fo-active",
+        "mode": "kill",
+        "rate_rps": 200,
+        "victim": "demo-1",
+        "fault_s": 14.3,
+        "requests": 8001,
+        "failed": 4,
+        "failed_by_status": {
+          "502": 4
+        },
+        "failed_before_fault": 0,
+        "failed_during_fault": 4,
+        "failed_after_restore": 0,
+        "failure_window": {
+          "first_offset_s": -0.003,
+          "last_offset_s": 0.042,
+          "span_s": 0.045
+        },
+        "failure_clusters": [
+          {
+            "start_offset_s": -0.003,
+            "end_offset_s": 0.042,
+            "visible_end_offset_s": 1.028,
+            "count": 4,
+            "max_latency_ms": 1001.0
+          }
+        ],
+        "first_failure_offset_s": -0.003,
+        "failover_time_s": 1.028,
+        "failover_failed_requests": 4,
+        "failover_max_latency_ms": 1001.0,
+        "reprobe_failures": 0,
+        "reprobe_clusters": 0,
+        "reprobe_failures_per_cooloff": 0.0,
+        "failed_after_first_cluster": 0,
+        "victim_served_before_fault": 300,
+        "recovery_s": 3.743,
+        "recovery_note": "first 200 served by the victim after restore",
+        "fault_start_ms": 1794847833756.0,
+        "restore_ms": 1794847848214.0,
+        "log_span_s": 39.999,
+        "case": "active-kill",
+        "config": "active",
+        "run": 1,
+        "seed": "291927372"
+      },
+      {
+        "test": "failover",
+        "id": "active-kill-r2",
+        "path": "/fo-active",
+        "mode": "kill",
+        "rate_rps": 200,
+        "victim": "demo-1",
+        "fault_s": 18.4,
+        "requests": 8801,
+        "failed": 4,
+        "failed_by_status": {
+          "502": 4
+        },
+        "failed_before_fault": 0,
+        "failed_during_fault": 4,
+        "failed_after_restore": 0,
+        "failure_window": {
+          "first_offset_s": 0.005,
+          "last_offset_s": 0.049,
+          "span_s": 0.044
+        },
+        "failure_clusters": [
+          {
+            "start_offset_s": 0.005,
+            "end_offset_s": 0.049,
+            "visible_end_offset_s": 1.03439990234375,
+            "count": 4,
+            "max_latency_ms": 1000.4
+          }
+        ],
+        "first_failure_offset_s": 0.005,
+        "failover_time_s": 1.03439990234375,
+        "failover_failed_requests": 4,
+        "failover_max_latency_ms": 1000.4,
+        "reprobe_failures": 0,
+        "reprobe_clusters": 0,
+        "reprobe_failures_per_cooloff": 0.0,
+        "failed_after_first_cluster": 0,
+        "victim_served_before_fault": 304,
+        "recovery_s": 2.493,
+        "recovery_note": "first 200 served by the victim after restore",
+        "fault_start_ms": 1794847874955.0,
+        "restore_ms": 1794847893536.0,
+        "log_span_s": 44.001,
+        "case": "active-kill",
+        "config": "active",
+        "run": 2,
+        "seed": "291927372"
+      },
+      {
+        "test": "failover",
+        "id": "active-kill-r3",
+        "path": "/fo-active",
+        "mode": "kill",
+        "rate_rps": 200,
+        "victim": "demo-1",
+        "fault_s": 23.2,
+        "requests": 9801,
+        "failed": 4,
+        "failed_by_status": {
+          "502": 4
+        },
+        "failed_before_fault": 0,
+        "failed_during_fault": 4,
+        "failed_after_restore": 0,
+        "failure_window": {
+          "first_offset_s": 0.006,
+          "last_offset_s": 0.052,
+          "span_s": 0.046
+        },
+        "failure_clusters": [
+          {
+            "start_offset_s": 0.006,
+            "end_offset_s": 0.052,
+            "visible_end_offset_s": 1.022699951171875,
+            "count": 4,
+            "max_latency_ms": 1000.7
+          }
+        ],
+        "first_failure_offset_s": 0.006,
+        "failover_time_s": 1.022699951171875,
+        "failover_failed_requests": 4,
+        "failover_max_latency_ms": 1000.7,
+        "reprobe_failures": 0,
+        "reprobe_clusters": 0,
+        "reprobe_failures_per_cooloff": 0.0,
+        "failed_after_first_cluster": 0,
+        "victim_served_before_fault": 303,
+        "recovery_s": 2.682,
+        "recovery_note": "first 200 served by the victim after restore",
+        "fault_start_ms": 1794847920094.0,
+        "restore_ms": 1794847943458.0,
+        "log_span_s": 49.0,
+        "case": "active-kill",
+        "config": "active",
+        "run": 3,
+        "seed": "291927372"
+      }
+    ],
+    "consul-fail500": [
+      {
+        "test": "failover",
+        "id": "consul-fail500-r1",
+        "path": "/fo-consul",
+        "mode": "fail500",
+        "rate_rps": 200,
+        "victim": "demo-1",
+        "fault_s": 20.5,
+        "requests": 8001,
+        "failed": 5,
+        "failed_by_status": {
+          "500": 5
+        },
+        "failed_before_fault": 0,
+        "failed_during_fault": 5,
+        "failed_after_restore": 0,
+        "failure_window": {
+          "first_offset_s": 0.011,
+          "last_offset_s": 20.05,
+          "span_s": 20.039
+        },
+        "failure_clusters": [
+          {
+            "start_offset_s": 0.011,
+            "end_offset_s": 0.04,
+            "visible_end_offset_s": 0.040800048828125,
+            "count": 3,
+            "max_latency_ms": 0.8
+          },
+          {
+            "start_offset_s": 10.046,
+            "end_offset_s": 10.046,
+            "visible_end_offset_s": 10.046800048828125,
+            "count": 1,
+            "max_latency_ms": 0.8
+          },
+          {
+            "start_offset_s": 20.05,
+            "end_offset_s": 20.05,
+            "visible_end_offset_s": 20.051699951171877,
+            "count": 1,
+            "max_latency_ms": 1.7
+          }
+        ],
+        "first_failure_offset_s": 0.011,
+        "failover_time_s": 0.040800048828125,
+        "failover_failed_requests": 3,
+        "failover_max_latency_ms": 0.8,
+        "reprobe_failures": 2,
+        "reprobe_clusters": 2,
+        "reprobe_failures_per_cooloff": 0.9756097560975611,
+        "failed_after_first_cluster": 2,
+        "victim_served_before_fault": 267,
+        "recovery_s": 9.558,
+        "recovery_note": "first 200 served by the victim after restore",
+        "fault_start_ms": 1794848223913.0,
+        "restore_ms": 1794848244416.0,
+        "log_span_s": 40.0,
+        "case": "consul-fail500",
+        "config": "consul",
+        "run": 1,
+        "seed": "291927372"
+      },
+      {
+        "test": "failover",
+        "id": "consul-fail500-r2",
+        "path": "/fo-consul",
+        "mode": "fail500",
+        "rate_rps": 200,
+        "victim": "demo-1",
+        "fault_s": 21.5,
+        "requests": 8200,
+        "failed": 5,
+        "failed_by_status": {
+          "500": 5
+        },
+        "failed_before_fault": 0,
+        "failed_during_fault": 5,
+        "failed_after_restore": 0,
+        "failure_window": {
+          "first_offset_s": 0.009,
+          "last_offset_s": 20.05,
+          "span_s": 20.041
+        },
+        "failure_clusters": [
+          {
+            "start_offset_s": 0.009,
+            "end_offset_s": 0.04,
+            "visible_end_offset_s": 0.04110009765625,
+            "count": 3,
+            "max_latency_ms": 1.1
+          },
+          {
+            "start_offset_s": 10.045,
+            "end_offset_s": 10.045,
+            "visible_end_offset_s": 10.04539990234375,
+            "count": 1,
+            "max_latency_ms": 0.4
+          },
+          {
+            "start_offset_s": 20.05,
+            "end_offset_s": 20.05,
+            "visible_end_offset_s": 20.051300048828125,
+            "count": 1,
+            "max_latency_ms": 1.3
+          }
+        ],
+        "first_failure_offset_s": 0.009,
+        "failover_time_s": 0.04110009765625,
+        "failover_failed_requests": 3,
+        "failover_max_latency_ms": 1.1,
+        "reprobe_failures": 2,
+        "reprobe_clusters": 2,
+        "reprobe_failures_per_cooloff": 0.9302325581395349,
+        "failed_after_first_cluster": 2,
+        "victim_served_before_fault": 267,
+        "recovery_s": 8.551,
+        "recovery_note": "first 200 served by the victim after restore",
+        "fault_start_ms": 1794848265391.0,
+        "restore_ms": 1794848286894.0,
+        "log_span_s": 40.995,
+        "case": "consul-fail500",
+        "config": "consul",
+        "run": 2,
+        "seed": "291927372"
+      },
+      {
+        "test": "failover",
+        "id": "consul-fail500-r3",
+        "path": "/fo-consul",
+        "mode": "fail500",
+        "rate_rps": 200,
+        "victim": "demo-1",
+        "fault_s": 25.7,
+        "requests": 9001,
+        "failed": 5,
+        "failed_by_status": {
+          "500": 5
+        },
+        "failed_before_fault": 0,
+        "failed_during_fault": 5,
+        "failed_after_restore": 0,
+        "failure_window": {
+          "first_offset_s": 0.014,
+          "last_offset_s": 20.055,
+          "span_s": 20.041
+        },
+        "failure_clusters": [
+          {
+            "start_offset_s": 0.014,
+            "end_offset_s": 0.045,
+            "visible_end_offset_s": 0.04560009765625,
+            "count": 3,
+            "max_latency_ms": 0.6
+          },
+          {
+            "start_offset_s": 10.05,
+            "end_offset_s": 10.05,
+            "visible_end_offset_s": 10.05089990234375,
+            "count": 1,
+            "max_latency_ms": 0.9
+          },
+          {
+            "start_offset_s": 20.055,
+            "end_offset_s": 20.055,
+            "visible_end_offset_s": 20.055300048828126,
+            "count": 1,
+            "max_latency_ms": 0.3
+          }
+        ],
+        "first_failure_offset_s": 0.014,
+        "failover_time_s": 0.04560009765625,
+        "failover_failed_requests": 3,
+        "failover_max_latency_ms": 0.6,
+        "reprobe_failures": 2,
+        "reprobe_clusters": 2,
+        "reprobe_failures_per_cooloff": 0.7782101167315175,
+        "failed_after_first_cluster": 2,
+        "victim_served_before_fault": 266,
+        "recovery_s": 4.358,
+        "recovery_note": "first 200 served by the victim after restore",
+        "fault_start_ms": 1794848307719.0,
+        "restore_ms": 1794848333421.0,
+        "log_span_s": 45.0,
+        "case": "consul-fail500",
+        "config": "consul",
+        "run": 3,
+        "seed": "291927372"
+      }
+    ],
+    "consul-kill": [
+      {
+        "test": "failover",
+        "id": "consul-kill-r1",
+        "path": "/fo-consul",
+        "mode": "kill",
+        "rate_rps": 200,
+        "victim": "demo-1",
+        "fault_s": 15.3,
+        "requests": 8201,
+        "failed": 69,
+        "failed_by_status": {
+          "502": 69
+        },
+        "failed_before_fault": 0,
+        "failed_during_fault": 69,
+        "failed_after_restore": 0,
+        "failure_window": {
+          "first_offset_s": 0.004,
+          "last_offset_s": 1.025,
+          "span_s": 1.021
+        },
+        "failure_clusters": [
+          {
+            "start_offset_s": 0.004,
+            "end_offset_s": 1.025,
+            "visible_end_offset_s": 2.026800048828125,
+            "count": 69,
+            "max_latency_ms": 1002.2
+          }
+        ],
+        "first_failure_offset_s": 0.004,
+        "failover_time_s": 2.026800048828125,
+        "failover_failed_requests": 69,
+        "failover_max_latency_ms": 1002.2,
+        "reprobe_failures": 0,
+        "reprobe_clusters": 0,
+        "reprobe_failures_per_cooloff": 0.0,
+        "failed_after_first_cluster": 0,
+        "victim_served_before_fault": 303,
+        "recovery_s": 1.983,
+        "recovery_note": "first 200 served by the victim after restore",
+        "fault_start_ms": 1794848088959.0,
+        "restore_ms": 1794848104442.0,
+        "log_span_s": 41.0,
+        "case": "consul-kill",
+        "config": "consul",
+        "run": 1,
+        "seed": "291927372"
+      },
+      {
+        "test": "failover",
+        "id": "consul-kill-r2",
+        "path": "/fo-consul",
+        "mode": "kill",
+        "rate_rps": 200,
+        "victim": "demo-1",
+        "fault_s": 23.9,
+        "requests": 9801,
+        "failed": 69,
+        "failed_by_status": {
+          "502": 69
+        },
+        "failed_before_fault": 0,
+        "failed_during_fault": 69,
+        "failed_after_restore": 0,
+        "failure_window": {
+          "first_offset_s": -0.001,
+          "last_offset_s": 1.018,
+          "span_s": 1.019
+        },
+        "failure_clusters": [
+          {
+            "start_offset_s": -0.001,
+            "end_offset_s": 1.018,
+            "visible_end_offset_s": 2.0345,
+            "count": 69,
+            "max_latency_ms": 1016.5
+          }
+        ],
+        "first_failure_offset_s": -0.001,
+        "failover_time_s": 2.0345,
+        "failover_failed_requests": 69,
+        "failover_max_latency_ms": 1016.5,
+        "reprobe_failures": 0,
+        "reprobe_clusters": 0,
+        "reprobe_failures_per_cooloff": 0.0,
+        "failed_after_first_cluster": 0,
+        "victim_served_before_fault": 303,
+        "recovery_s": 0.764,
+        "recovery_note": "first 200 served by the victim after restore",
+        "fault_start_ms": 1794848131109.0,
+        "restore_ms": 1794848155173.0,
+        "log_span_s": 49.001,
+        "case": "consul-kill",
+        "config": "consul",
+        "run": 2,
+        "seed": "291927372"
+      },
+      {
+        "test": "failover",
+        "id": "consul-kill-r3",
+        "path": "/fo-consul",
+        "mode": "kill",
+        "rate_rps": 200,
+        "victim": "demo-1",
+        "fault_s": 16.1,
+        "requests": 8401,
+        "failed": 69,
+        "failed_by_status": {
+          "502": 69
+        },
+        "failed_before_fault": 0,
+        "failed_during_fault": 69,
+        "failed_after_restore": 0,
+        "failure_window": {
+          "first_offset_s": -0.002,
+          "last_offset_s": 1.019,
+          "span_s": 1.021
+        },
+        "failure_clusters": [
+          {
+            "start_offset_s": -0.002,
+            "end_offset_s": 1.019,
+            "visible_end_offset_s": 2.02010009765625,
+            "count": 69,
+            "max_latency_ms": 1002.5
+          }
+        ],
+        "first_failure_offset_s": -0.002,
+        "failover_time_s": 2.02010009765625,
+        "failover_failed_requests": 69,
+        "failover_max_latency_ms": 1002.5,
+        "reprobe_failures": 0,
+        "reprobe_clusters": 0,
+        "reprobe_failures_per_cooloff": 0.0,
+        "failed_after_first_cluster": 0,
+        "victim_served_before_fault": 299,
+        "recovery_s": 1.585,
+        "recovery_note": "first 200 served by the victim after restore",
+        "fault_start_ms": 1794848181229.0,
+        "restore_ms": 1794848197477.0,
+        "log_span_s": 42.001,
+        "case": "consul-kill",
+        "config": "consul",
+        "run": 3,
+        "seed": "291927372"
+      }
+    ],
+    "passive-fail500": [
+      {
+        "test": "failover",
+        "id": "passive-fail500-r1",
+        "path": "/fo-passive",
+        "mode": "fail500",
+        "rate_rps": 200,
+        "victim": "demo-1",
+        "fault_s": 17.1,
+        "requests": 7401,
+        "failed": 4,
+        "failed_by_status": {
+          "500": 4
+        },
+        "failed_before_fault": 0,
+        "failed_during_fault": 4,
+        "failed_after_restore": 0,
+        "failure_window": {
+          "first_offset_s": 0.01,
+          "last_offset_s": 10.045,
+          "span_s": 10.035
+        },
+        "failure_clusters": [
+          {
+            "start_offset_s": 0.01,
+            "end_offset_s": 0.041,
+            "visible_end_offset_s": 0.04139990234375,
+            "count": 3,
+            "max_latency_ms": 0.4
+          },
+          {
+            "start_offset_s": 10.045,
+            "end_offset_s": 10.045,
+            "visible_end_offset_s": 10.046,
+            "count": 1,
+            "max_latency_ms": 1.0
+          }
+        ],
+        "first_failure_offset_s": 0.01,
+        "failover_time_s": 0.04139990234375,
+        "failover_failed_requests": 3,
+        "failover_max_latency_ms": 0.4,
+        "reprobe_failures": 1,
+        "reprobe_clusters": 1,
+        "reprobe_failures_per_cooloff": 0.5847953216374269,
+        "failed_after_first_cluster": 1,
+        "victim_served_before_fault": 267,
+        "recovery_s": 2.946,
+        "recovery_note": "first 200 served by the victim after restore",
+        "fault_start_ms": 1794847704711.0,
+        "restore_ms": 1794847721815.0,
+        "log_span_s": 36.998,
+        "case": "passive-fail500",
+        "config": "passive",
+        "run": 1,
+        "seed": "291927372"
+      },
+      {
+        "test": "failover",
+        "id": "passive-fail500-r2",
+        "path": "/fo-passive",
+        "mode": "fail500",
+        "rate_rps": 200,
+        "victim": "demo-1",
+        "fault_s": 25.7,
+        "requests": 9001,
+        "failed": 5,
+        "failed_by_status": {
+          "500": 5
+        },
+        "failed_before_fault": 0,
+        "failed_during_fault": 5,
+        "failed_after_restore": 0,
+        "failure_window": {
+          "first_offset_s": 0.006,
+          "last_offset_s": 20.045,
+          "span_s": 20.039
+        },
+        "failure_clusters": [
+          {
+            "start_offset_s": 0.006,
+            "end_offset_s": 0.035,
+            "visible_end_offset_s": 0.03639990234375,
+            "count": 3,
+            "max_latency_ms": 1.4
+          },
+          {
+            "start_offset_s": 10.04,
+            "end_offset_s": 10.04,
+            "visible_end_offset_s": 10.040199951171875,
+            "count": 1,
+            "max_latency_ms": 0.2
+          },
+          {
+            "start_offset_s": 20.045,
+            "end_offset_s": 20.045,
+            "visible_end_offset_s": 20.04589990234375,
+            "count": 1,
+            "max_latency_ms": 0.9
+          }
+        ],
+        "first_failure_offset_s": 0.006,
+        "failover_time_s": 0.03639990234375,
+        "failover_failed_requests": 3,
+        "failover_max_latency_ms": 1.4,
+        "reprobe_failures": 2,
+        "reprobe_clusters": 2,
+        "reprobe_failures_per_cooloff": 0.7782101167315175,
+        "failed_after_first_cluster": 2,
+        "victim_served_before_fault": 267,
+        "recovery_s": 4.346,
+        "recovery_note": "first 200 served by the victim after restore",
+        "fault_start_ms": 1794847742893.0,
+        "restore_ms": 1794847768596.0,
+        "log_span_s": 44.999,
+        "case": "passive-fail500",
+        "config": "passive",
+        "run": 2,
+        "seed": "291927372"
+      },
+      {
+        "test": "failover",
+        "id": "passive-fail500-r3",
+        "path": "/fo-passive",
+        "mode": "fail500",
+        "rate_rps": 200,
+        "victim": "demo-1",
+        "fault_s": 23.7,
+        "requests": 8601,
+        "failed": 5,
+        "failed_by_status": {
+          "500": 5
+        },
+        "failed_before_fault": 0,
+        "failed_during_fault": 5,
+        "failed_after_restore": 0,
+        "failure_window": {
+          "first_offset_s": 0.01,
+          "last_offset_s": 20.051,
+          "span_s": 20.041
+        },
+        "failure_clusters": [
+          {
+            "start_offset_s": 0.01,
+            "end_offset_s": 0.04,
+            "visible_end_offset_s": 0.04110009765625,
+            "count": 3,
+            "max_latency_ms": 1.1
+          },
+          {
+            "start_offset_s": 10.045,
+            "end_offset_s": 10.045,
+            "visible_end_offset_s": 10.04589990234375,
+            "count": 1,
+            "max_latency_ms": 0.9
+          },
+          {
+            "start_offset_s": 20.051,
+            "end_offset_s": 20.051,
+            "visible_end_offset_s": 20.051699951171877,
+            "count": 1,
+            "max_latency_ms": 0.7
+          }
+        ],
+        "first_failure_offset_s": 0.01,
+        "failover_time_s": 0.04110009765625,
+        "failover_failed_requests": 3,
+        "failover_max_latency_ms": 1.1,
+        "reprobe_failures": 2,
+        "reprobe_clusters": 2,
+        "reprobe_failures_per_cooloff": 0.8438818565400843,
+        "failed_after_first_cluster": 2,
+        "victim_served_before_fault": 267,
+        "recovery_s": 6.351,
+        "recovery_note": "first 200 served by the victim after restore",
+        "fault_start_ms": 1794847789088.0,
+        "restore_ms": 1794847812792.0,
+        "log_span_s": 43.0,
+        "case": "passive-fail500",
+        "config": "passive",
+        "run": 3,
+        "seed": "291927372"
+      }
+    ],
+    "passive-kill": [
+      {
+        "test": "failover",
+        "id": "passive-kill-r1",
+        "path": "/fo-passive",
+        "mode": "kill",
+        "rate_rps": 200,
+        "victim": "demo-1",
+        "fault_s": 16.6,
+        "requests": 8401,
+        "failed": 4,
+        "failed_by_status": {
+          "502": 4
+        },
+        "failed_before_fault": 0,
+        "failed_during_fault": 4,
+        "failed_after_restore": 0,
+        "failure_window": {
+          "first_offset_s": -0.004,
+          "last_offset_s": 10.036,
+          "span_s": 10.04
+        },
+        "failure_clusters": [
+          {
+            "start_offset_s": -0.004,
+            "end_offset_s": 0.025,
+            "visible_end_offset_s": 0.0255,
+            "count": 3,
+            "max_latency_ms": 2.0
+          },
+          {
+            "start_offset_s": 10.036,
+            "end_offset_s": 10.036,
+            "visible_end_offset_s": 10.04510009765625,
+            "count": 1,
+            "max_latency_ms": 9.1
+          }
+        ],
+        "first_failure_offset_s": -0.004,
+        "failover_time_s": 0.0255,
+        "failover_failed_requests": 3,
+        "failover_max_latency_ms": 2.0,
+        "reprobe_failures": 1,
+        "reprobe_clusters": 1,
+        "reprobe_failures_per_cooloff": 0.6024096385542168,
+        "failed_after_first_cluster": 1,
+        "victim_served_before_fault": 301,
+        "recovery_s": 3.267,
+        "recovery_note": "first 200 served by the victim after restore",
+        "fault_start_ms": 1794847571628.0,
+        "restore_ms": 1794847588406.0,
+        "log_span_s": 42.001,
+        "case": "passive-kill",
+        "config": "passive",
+        "run": 1,
+        "seed": "291927372"
+      },
+      {
+        "test": "failover",
+        "id": "passive-kill-r2",
+        "path": "/fo-passive",
+        "mode": "kill",
+        "rate_rps": 200,
+        "victim": "demo-1",
+        "fault_s": 16.7,
+        "requests": 8401,
+        "failed": 5,
+        "failed_by_status": {
+          "502": 5
+        },
+        "failed_before_fault": 0,
+        "failed_during_fault": 5,
+        "failed_after_restore": 0,
+        "failure_window": {
+          "first_offset_s": 0.006,
+          "last_offset_s": 10.057,
+          "span_s": 10.051
+        },
+        "failure_clusters": [
+          {
+            "start_offset_s": 0.006,
+            "end_offset_s": 0.052,
+            "visible_end_offset_s": 1.021800048828125,
+            "count": 4,
+            "max_latency_ms": 1000.8
+          },
+          {
+            "start_offset_s": 10.057,
+            "end_offset_s": 10.057,
+            "visible_end_offset_s": 10.069199951171875,
+            "count": 1,
+            "max_latency_ms": 12.2
+          }
+        ],
+        "first_failure_offset_s": 0.006,
+        "failover_time_s": 1.021800048828125,
+        "failover_failed_requests": 4,
+        "failover_max_latency_ms": 1000.8,
+        "reprobe_failures": 1,
+        "reprobe_clusters": 1,
+        "reprobe_failures_per_cooloff": 0.5988023952095809,
+        "failed_after_first_cluster": 1,
+        "victim_served_before_fault": 303,
+        "recovery_s": 3.225,
+        "recovery_note": "first 200 served by the victim after restore",
+        "fault_start_ms": 1794847614789.0,
+        "restore_ms": 1794847631640.0,
+        "log_span_s": 42.001,
+        "case": "passive-kill",
+        "config": "passive",
+        "run": 2,
+        "seed": "291927372"
+      },
+      {
+        "test": "failover",
+        "id": "passive-kill-r3",
+        "path": "/fo-passive",
+        "mode": "kill",
+        "rate_rps": 200,
+        "victim": "demo-1",
+        "fault_s": 20.4,
+        "requests": 9200,
+        "failed": 6,
+        "failed_by_status": {
+          "502": 6
+        },
+        "failed_before_fault": 0,
+        "failed_during_fault": 6,
+        "failed_after_restore": 0,
+        "failure_window": {
+          "first_offset_s": 0.012,
+          "last_offset_s": 20.081,
+          "span_s": 20.069
+        },
+        "failure_clusters": [
+          {
+            "start_offset_s": 0.012,
+            "end_offset_s": 0.056,
+            "visible_end_offset_s": 1.02660009765625,
+            "count": 4,
+            "max_latency_ms": 1000.6
+          },
+          {
+            "start_offset_s": 10.066,
+            "end_offset_s": 10.066,
+            "visible_end_offset_s": 10.072300048828126,
+            "count": 1,
+            "max_latency_ms": 6.3
+          },
+          {
+            "start_offset_s": 20.081,
+            "end_offset_s": 20.081,
+            "visible_end_offset_s": 20.091199951171873,
+            "count": 1,
+            "max_latency_ms": 10.2
+          }
+        ],
+        "first_failure_offset_s": 0.012,
+        "failover_time_s": 1.02660009765625,
+        "failover_failed_requests": 4,
+        "failover_max_latency_ms": 1000.6,
+        "reprobe_failures": 2,
+        "reprobe_clusters": 2,
+        "reprobe_failures_per_cooloff": 0.9803921568627451,
+        "failed_after_first_cluster": 2,
+        "victim_served_before_fault": 302,
+        "recovery_s": 9.533,
+        "recovery_note": "first 200 served by the victim after restore",
+        "fault_start_ms": 1794847657946.0,
+        "restore_ms": 1794847678509.0,
+        "log_span_s": 45.995,
+        "case": "passive-kill",
+        "config": "passive",
+        "run": 3,
+        "seed": "291927372"
+      }
+    ]
+  },
+  "overhead": {
+    "accesslog": {
+      "test": "overhead",
+      "config": {
+        "rate_rps": 1000,
+        "phase_duration_s": 8,
+        "warmup_s": 5,
+        "rounds": 5,
+        "aa": false,
+        "direct_url": "http://demo-1:8080/bare",
+        "gateway_url": "http://gateway:8080/bare"
+      },
+      "phases": [
+        {
+          "name": "ab0_0A",
+          "kind": "AB",
+          "round": 0,
+          "side": "A",
+          "target": "direct",
+          "requests": 7999,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.040458,
+            "p50": 0.252542,
+            "p90": 0.5456416000000001,
+            "p95": 0.86575,
+            "p99": 2.0050488399999993,
+            "p999": 4.585121668000201,
+            "max": 10.183501,
+            "avg": 0.3319770750093755
+          }
+        },
+        {
+          "name": "ab0_1B",
+          "kind": "AB",
+          "round": 0,
+          "side": "B",
+          "target": "gateway",
+          "requests": 8003,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.110709,
+            "p50": 0.426084,
+            "p90": 0.8003912000000001,
+            "p95": 1.1383290999999995,
+            "p99": 2.374105499999999,
+            "p999": 6.461483334000264,
+            "max": 10.879458,
+            "avg": 0.5115209206547556
+          }
+        },
+        {
+          "name": "ab0_2B",
+          "kind": "AB",
+          "round": 0,
+          "side": "B",
+          "target": "gateway",
+          "requests": 7999,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.120667,
+            "p50": 0.441417,
+            "p90": 0.7214246,
+            "p95": 0.8655624999999998,
+            "p99": 2.564477499999999,
+            "p999": 14.919327334001538,
+            "max": 20.544334,
+            "avg": 0.5216358686085755
+          }
+        },
+        {
+          "name": "ab0_3A",
+          "kind": "AB",
+          "round": 0,
+          "side": "A",
+          "target": "direct",
+          "requests": 8000,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.024125,
+            "p50": 0.2815835,
+            "p90": 0.3734253,
+            "p95": 0.4523502999999996,
+            "p99": 1.2895949999999994,
+            "p999": 4.02402608400006,
+            "max": 5.957334,
+            "avg": 0.28421563349999945
+          }
+        },
+        {
+          "name": "ab1_0B",
+          "kind": "AB",
+          "round": 1,
+          "side": "B",
+          "target": "gateway",
+          "requests": 8001,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.109959,
+            "p50": 0.42225,
+            "p90": 0.717708,
+            "p95": 0.892291,
+            "p99": 2.2365,
+            "p999": 5.048375000000114,
+            "max": 6.3205,
+            "avg": 0.4762665610548679
+          }
+        },
+        {
+          "name": "ab1_1A",
+          "kind": "AB",
+          "round": 1,
+          "side": "A",
+          "target": "direct",
+          "requests": 8001,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.033584,
+            "p50": 0.233125,
+            "p90": 0.364166,
+            "p95": 0.455667,
+            "p99": 1.039458,
+            "p999": 2.9910830000000024,
+            "max": 4.104,
+            "avg": 0.24846963142107154
+          }
+        },
+        {
+          "name": "ab1_2A",
+          "kind": "AB",
+          "round": 1,
+          "side": "A",
+          "target": "direct",
+          "requests": 8001,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.04125,
+            "p50": 0.274583,
+            "p90": 0.356167,
+            "p95": 0.410583,
+            "p99": 0.8995,
+            "p999": 2.4408750000001165,
+            "max": 6.473625,
+            "avg": 0.2526994190726166
+          }
+        },
+        {
+          "name": "ab1_3B",
+          "kind": "AB",
+          "round": 1,
+          "side": "B",
+          "target": "gateway",
+          "requests": 8001,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.10625,
+            "p50": 0.490167,
+            "p90": 0.905417,
+            "p95": 1.116583,
+            "p99": 2.313459,
+            "p999": 5.455791000000402,
+            "max": 7.551708,
+            "avg": 0.5683563395825523
+          }
+        },
+        {
+          "name": "ab2_0A",
+          "kind": "AB",
+          "round": 2,
+          "side": "A",
+          "target": "direct",
+          "requests": 8000,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.034209,
+            "p50": 0.2891045,
+            "p90": 0.38601670000000005,
+            "p95": 0.45246524999999993,
+            "p99": 1.0652858399999998,
+            "p999": 3.83695079100003,
+            "max": 8.116459,
+            "avg": 0.2844217669999989
+          }
+        },
+        {
+          "name": "ab2_1B",
+          "kind": "AB",
+          "round": 2,
+          "side": "B",
+          "target": "gateway",
+          "requests": 8002,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.111,
+            "p50": 0.485813,
+            "p90": 0.8527836,
+            "p95": 0.99749165,
+            "p99": 2.0700026699999996,
+            "p999": 4.243805834000025,
+            "max": 6.496,
+            "avg": 0.5374769340164971
+          }
+        },
+        {
+          "name": "ab2_2B",
+          "kind": "AB",
+          "round": 2,
+          "side": "B",
+          "target": "gateway",
+          "requests": 8002,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.118209,
+            "p50": 0.45439549999999995,
+            "p90": 0.8699378000000002,
+            "p95": 1.1182913499999998,
+            "p99": 2.2753729099999997,
+            "p999": 4.5569940420000785,
+            "max": 8.430917,
+            "avg": 0.5391964631342171
+          }
+        },
+        {
+          "name": "ab2_3A",
+          "kind": "AB",
+          "round": 2,
+          "side": "A",
+          "target": "direct",
+          "requests": 8003,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.037708,
+            "p50": 0.266583,
+            "p90": 0.4194834,
+            "p95": 0.5626042,
+            "p99": 1.5988094999999996,
+            "p999": 4.187293584000293,
+            "max": 8.39375,
+            "avg": 0.2950346376358874
+          }
+        },
+        {
+          "name": "ab3_0B",
+          "kind": "AB",
+          "round": 3,
+          "side": "B",
+          "target": "gateway",
+          "requests": 8001,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.119208,
+            "p50": 0.511459,
+            "p90": 0.853042,
+            "p95": 1.000292,
+            "p99": 1.794166,
+            "p999": 6.163667000000149,
+            "max": 11.593334,
+            "avg": 0.548647335583052
+          }
+        },
+        {
+          "name": "ab3_1A",
+          "kind": "AB",
+          "round": 3,
+          "side": "A",
+          "target": "direct",
+          "requests": 8002,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.037125,
+            "p50": 0.283167,
+            "p90": 0.3324372,
+            "p95": 0.37020594999999995,
+            "p99": 0.8333867499999995,
+            "p999": 2.3121948750000114,
+            "max": 4.8595,
+            "avg": 0.2562705309922524
+          }
+        },
+        {
+          "name": "ab3_2A",
+          "kind": "AB",
+          "round": 3,
+          "side": "A",
+          "target": "direct",
+          "requests": 8001,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.032416,
+            "p50": 0.232208,
+            "p90": 0.404542,
+            "p95": 0.542541,
+            "p99": 1.69425,
+            "p999": 47.251000000000005,
+            "max": 48.065125,
+            "avg": 0.37847306699162636
+          }
+        },
+        {
+          "name": "ab3_3B",
+          "kind": "AB",
+          "round": 3,
+          "side": "B",
+          "target": "gateway",
+          "requests": 8001,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.117292,
+            "p50": 0.446959,
+            "p90": 0.857292,
+            "p95": 1.015125,
+            "p99": 1.975708,
+            "p999": 5.108208000000199,
+            "max": 6.197584,
+            "avg": 0.5218426824146988
+          }
+        },
+        {
+          "name": "ab4_0A",
+          "kind": "AB",
+          "round": 4,
+          "side": "A",
+          "target": "direct",
+          "requests": 8001,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.031083,
+            "p50": 0.282875,
+            "p90": 0.360541,
+            "p95": 0.422583,
+            "p99": 0.911542,
+            "p999": 2.4703750000000237,
+            "max": 3.494,
+            "avg": 0.2665974470691166
+          }
+        },
+        {
+          "name": "ab4_1B",
+          "kind": "AB",
+          "round": 4,
+          "side": "B",
+          "target": "gateway",
+          "requests": 8002,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.101,
+            "p50": 0.5034164999999999,
+            "p90": 0.8791208,
+            "p95": 1.0382723,
+            "p99": 2.12033358,
+            "p999": 4.598262334000062,
+            "max": 7.225958,
+            "avg": 0.5487389510122478
+          }
+        },
+        {
+          "name": "ab4_2B",
+          "kind": "AB",
+          "round": 4,
+          "side": "B",
+          "target": "gateway",
+          "requests": 8001,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.078583,
+            "p50": 0.407291,
+            "p90": 0.702917,
+            "p95": 0.831292,
+            "p99": 2.004583,
+            "p999": 4.553458000000098,
+            "max": 6.393917,
+            "avg": 0.45251991513560735
+          }
+        },
+        {
+          "name": "ab4_3A",
+          "kind": "AB",
+          "round": 4,
+          "side": "A",
+          "target": "direct",
+          "requests": 8001,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.046292,
+            "p50": 0.280791,
+            "p90": 0.35225,
+            "p95": 0.414959,
+            "p99": 1.27025,
+            "p999": 4.436917000000129,
+            "max": 14.762625,
+            "avg": 0.2738293535808023
+          }
+        }
+      ]
+    },
+    "access_log_off": {
+      "test": "overhead",
+      "config": {
+        "rate_rps": 1000,
+        "phase_duration_s": 8,
+        "warmup_s": 5,
+        "rounds": 5,
+        "aa": true,
+        "direct_url": "http://demo-1:8080/bare",
+        "gateway_url": "http://gateway:8080/bare"
+      },
+      "phases": [
+        {
+          "name": "ab0_0A",
+          "kind": "AB",
+          "round": 0,
+          "side": "A",
+          "target": "direct",
+          "requests": 8001,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.03975,
+            "p50": 0.195041,
+            "p90": 0.401916,
+            "p95": 0.523208,
+            "p99": 1.775792,
+            "p999": 11.40887500000045,
+            "max": 19.364792,
+            "avg": 0.29141381952255824
+          }
+        },
+        {
+          "name": "ab0_1B",
+          "kind": "AB",
+          "round": 0,
+          "side": "B",
+          "target": "gateway",
+          "requests": 8001,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.09425,
+            "p50": 0.338209,
+            "p90": 0.730208,
+            "p95": 0.922875,
+            "p99": 2.168208,
+            "p999": 12.770542000001514,
+            "max": 20.17525,
+            "avg": 0.46309104886889063
+          }
+        },
+        {
+          "name": "ab0_2B",
+          "kind": "AB",
+          "round": 0,
+          "side": "B",
+          "target": "gateway",
+          "requests": 8001,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.103541,
+            "p50": 0.352542,
+            "p90": 0.710375,
+            "p95": 0.881417,
+            "p99": 2.296291,
+            "p999": 7.725042000000026,
+            "max": 15.883833,
+            "avg": 0.4525475073115863
+          }
+        },
+        {
+          "name": "ab0_3A",
+          "kind": "AB",
+          "round": 0,
+          "side": "A",
+          "target": "direct",
+          "requests": 8003,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.035792,
+            "p50": 0.201708,
+            "p90": 0.391225,
+            "p95": 0.4750333999999997,
+            "p99": 1.3697599999999974,
+            "p999": 7.418532252000334,
+            "max": 14.342042,
+            "avg": 0.2618353624890663
+          }
+        },
+        {
+          "name": "aa0_0A",
+          "kind": "AA",
+          "round": 0,
+          "side": "A",
+          "target": "direct",
+          "requests": 8001,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.02675,
+            "p50": 0.235083,
+            "p90": 0.503333,
+            "p95": 0.938292,
+            "p99": 3.716417,
+            "p999": 12.281334000000006,
+            "max": 43.764875,
+            "avg": 0.39224872715910447
+          }
+        },
+        {
+          "name": "aa0_1B",
+          "kind": "AA",
+          "round": 0,
+          "side": "B",
+          "target": "direct",
+          "requests": 8002,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.034166,
+            "p50": 0.203604,
+            "p90": 0.6144833000000001,
+            "p95": 1.00023335,
+            "p99": 2.7191046799999965,
+            "p999": 5.883015875000059,
+            "max": 10.893458,
+            "avg": 0.3420601098475389
+          }
+        },
+        {
+          "name": "aa0_2B",
+          "kind": "AA",
+          "round": 0,
+          "side": "B",
+          "target": "direct",
+          "requests": 8002,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.030083,
+            "p50": 0.219104,
+            "p90": 0.5259833,
+            "p95": 0.8339951999999997,
+            "p99": 3.8221997499999976,
+            "p999": 13.967017250000094,
+            "max": 17.908541,
+            "avg": 0.3730457613096729
+          }
+        },
+        {
+          "name": "aa0_3A",
+          "kind": "AA",
+          "round": 0,
+          "side": "A",
+          "target": "direct",
+          "requests": 8001,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.040959,
+            "p50": 0.203208,
+            "p90": 0.546416,
+            "p95": 0.887208,
+            "p99": 2.282459,
+            "p999": 6.256041000000049,
+            "max": 9.2995,
+            "avg": 0.31719668991376054
+          }
+        },
+        {
+          "name": "ab1_0B",
+          "kind": "AB",
+          "round": 1,
+          "side": "B",
+          "target": "gateway",
+          "requests": 8001,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.098666,
+            "p50": 0.310875,
+            "p90": 0.703708,
+            "p95": 1.02525,
+            "p99": 2.954458,
+            "p999": 13.737625000000032,
+            "max": 14.127334,
+            "avg": 0.4553002267216607
+          }
+        },
+        {
+          "name": "ab1_1A",
+          "kind": "AB",
+          "round": 1,
+          "side": "A",
+          "target": "direct",
+          "requests": 8001,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.035875,
+            "p50": 0.227625,
+            "p90": 0.486667,
+            "p95": 0.811583,
+            "p99": 2.684583,
+            "p999": 11.39233400000004,
+            "max": 21.547792,
+            "avg": 0.34726308698912584
+          }
+        },
+        {
+          "name": "ab1_2A",
+          "kind": "AB",
+          "round": 1,
+          "side": "A",
+          "target": "direct",
+          "requests": 8001,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.034791,
+            "p50": 0.191541,
+            "p90": 0.380458,
+            "p95": 0.483708,
+            "p99": 1.260792,
+            "p999": 3.4661670000000355,
+            "max": 5.240292,
+            "avg": 0.25116154168228993
+          }
+        },
+        {
+          "name": "ab1_3B",
+          "kind": "AB",
+          "round": 1,
+          "side": "B",
+          "target": "gateway",
+          "requests": 8001,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.089708,
+            "p50": 0.313375,
+            "p90": 0.690416,
+            "p95": 0.934,
+            "p99": 2.226875,
+            "p999": 4.266042000000058,
+            "max": 7.794875,
+            "avg": 0.41610497762779836
+          }
+        },
+        {
+          "name": "aa1_0B",
+          "kind": "AA",
+          "round": 1,
+          "side": "B",
+          "target": "direct",
+          "requests": 8001,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.039,
+            "p50": 0.21125,
+            "p90": 0.440166,
+            "p95": 0.696042,
+            "p99": 2.364042,
+            "p999": 21.873500000000003,
+            "max": 22.489166,
+            "avg": 0.33846786364204345
+          }
+        },
+        {
+          "name": "aa1_1A",
+          "kind": "AA",
+          "round": 1,
+          "side": "A",
+          "target": "direct",
+          "requests": 8001,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.036583,
+            "p50": 0.242666,
+            "p90": 0.400083,
+            "p95": 0.608209,
+            "p99": 1.550208,
+            "p999": 3.8540830000000317,
+            "max": 9.538208,
+            "avg": 0.2838985628046493
+          }
+        },
+        {
+          "name": "aa1_2A",
+          "kind": "AA",
+          "round": 1,
+          "side": "A",
+          "target": "direct",
+          "requests": 8002,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.034209,
+            "p50": 0.248875,
+            "p90": 0.49700440000000007,
+            "p95": 0.8849497,
+            "p99": 2.304454,
+            "p999": 9.863391709000132,
+            "max": 12.576292,
+            "avg": 0.33932464308922755
+          }
+        },
+        {
+          "name": "aa1_3B",
+          "kind": "AA",
+          "round": 1,
+          "side": "B",
+          "target": "direct",
+          "requests": 8001,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.032708,
+            "p50": 0.204625,
+            "p90": 0.614125,
+            "p95": 1.09825,
+            "p99": 3.206083,
+            "p999": 12.746750000000002,
+            "max": 19.771334,
+            "avg": 0.3690329642544675
+          }
+        },
+        {
+          "name": "ab2_0A",
+          "kind": "AB",
+          "round": 2,
+          "side": "A",
+          "target": "direct",
+          "requests": 8001,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": -0.342139,
+            "p50": 0.270417,
+            "p90": 0.578375,
+            "p95": 0.853584,
+            "p99": 3.743041,
+            "p999": 42.23537500000003,
+            "max": 43.096459,
+            "avg": 0.5249015606799148
+          }
+        },
+        {
+          "name": "ab2_1B",
+          "kind": "AB",
+          "round": 2,
+          "side": "B",
+          "target": "gateway",
+          "requests": 8000,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.091667,
+            "p50": 0.3757915,
+            "p90": 0.9093464,
+            "p95": 1.3855898999999998,
+            "p99": 3.599497499999999,
+            "p999": 9.928173125000042,
+            "max": 15.014042,
+            "avg": 0.5452072388749977
+          }
+        },
+        {
+          "name": "ab2_2B",
+          "kind": "AB",
+          "round": 2,
+          "side": "B",
+          "target": "gateway",
+          "requests": 8000,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.099875,
+            "p50": 0.397771,
+            "p90": 1.0174119000000001,
+            "p95": 1.5124395999999978,
+            "p99": 4.9514893399999975,
+            "p999": 10.273732125000315,
+            "max": 12.325333,
+            "avg": 0.5921922892499994
+          }
+        },
+        {
+          "name": "ab2_3A",
+          "kind": "AB",
+          "round": 2,
+          "side": "A",
+          "target": "direct",
+          "requests": 8002,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.03375,
+            "p50": 0.194417,
+            "p90": 0.4941536,
+            "p95": 0.8153645499999991,
+            "p99": 2.390817999999999,
+            "p999": 6.034492250000374,
+            "max": 36.736209,
+            "avg": 0.3114692093226692
+          }
+        },
+        {
+          "name": "aa2_0A",
+          "kind": "AA",
+          "round": 2,
+          "side": "A",
+          "target": "direct",
+          "requests": 8001,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.033667,
+            "p50": 0.194667,
+            "p90": 0.555917,
+            "p95": 0.89475,
+            "p99": 2.665541,
+            "p999": 6.651375000000988,
+            "max": 25.339042,
+            "avg": 0.3364416370453685
+          }
+        },
+        {
+          "name": "aa2_1B",
+          "kind": "AA",
+          "round": 2,
+          "side": "B",
+          "target": "direct",
+          "requests": 8001,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.035917,
+            "p50": 0.189458,
+            "p90": 0.433708,
+            "p95": 0.644916,
+            "p99": 1.961041,
+            "p999": 14.23158400000009,
+            "max": 36.361334,
+            "avg": 0.3000006047993991
+          }
+        },
+        {
+          "name": "aa2_2B",
+          "kind": "AA",
+          "round": 2,
+          "side": "B",
+          "target": "direct",
+          "requests": 8002,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.037209,
+            "p50": 0.213063,
+            "p90": 0.4875503000000002,
+            "p95": 0.8598666499999991,
+            "p99": 2.8943920799999976,
+            "p999": 8.929048458000509,
+            "max": 57.741792,
+            "avg": 0.3503391340914768
+          }
+        },
+        {
+          "name": "aa2_3A",
+          "kind": "AA",
+          "round": 2,
+          "side": "A",
+          "target": "direct",
+          "requests": 8001,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.032959,
+            "p50": 0.255125,
+            "p90": 0.444875,
+            "p95": 0.64325,
+            "p99": 1.545958,
+            "p999": 3.436375000000385,
+            "max": 6.933125,
+            "avg": 0.29454624834395676
+          }
+        },
+        {
+          "name": "ab3_0B",
+          "kind": "AB",
+          "round": 3,
+          "side": "B",
+          "target": "gateway",
+          "requests": 8001,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.105875,
+            "p50": 0.33725,
+            "p90": 0.881916,
+            "p95": 1.168583,
+            "p99": 2.7675,
+            "p999": 10.791584000000167,
+            "max": 15.907625,
+            "avg": 0.5050045225596789
+          }
+        },
+        {
+          "name": "ab3_1A",
+          "kind": "AB",
+          "round": 3,
+          "side": "A",
+          "target": "direct",
+          "requests": 8000,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.034084,
+            "p50": 0.21047949999999999,
+            "p90": 0.7024494000000003,
+            "p95": 1.2432520499999973,
+            "p99": 3.5164161599999946,
+            "p999": 20.702440417000535,
+            "max": 38.982833,
+            "avg": 0.426464589624998
+          }
+        },
+        {
+          "name": "ab3_2A",
+          "kind": "AB",
+          "round": 3,
+          "side": "A",
+          "target": "direct",
+          "requests": 8002,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": -0.041139,
+            "p50": 0.25552050000000004,
+            "p90": 0.4799833,
+            "p95": 0.7198878499999998,
+            "p99": 1.75681592,
+            "p999": 6.606618625000483,
+            "max": 12.228459,
+            "avg": 0.31664184666333384
+          }
+        },
+        {
+          "name": "ab3_3B",
+          "kind": "AB",
+          "round": 3,
+          "side": "B",
+          "target": "gateway",
+          "requests": 8002,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.109959,
+            "p50": 0.3536045,
+            "p90": 0.7241539000000004,
+            "p95": 1.0218604,
+            "p99": 2.44056983,
+            "p999": 4.727457041000075,
+            "max": 6.772417,
+            "avg": 0.4496604696325935
+          }
+        },
+        {
+          "name": "aa3_0B",
+          "kind": "AA",
+          "round": 3,
+          "side": "B",
+          "target": "direct",
+          "requests": 8001,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.033542,
+            "p50": 0.225166,
+            "p90": 0.517875,
+            "p95": 0.822333,
+            "p99": 2.5495,
+            "p999": 6.751458000000163,
+            "max": 14.829333,
+            "avg": 0.32180614060742535
+          }
+        },
+        {
+          "name": "aa3_1A",
+          "kind": "AA",
+          "round": 3,
+          "side": "A",
+          "target": "direct",
+          "requests": 8002,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.033709,
+            "p50": 0.188833,
+            "p90": 0.5211664,
+            "p95": 0.83054195,
+            "p99": 2.1675520899999983,
+            "p999": 5.438420625000401,
+            "max": 9.997708,
+            "avg": 0.3010444360159968
+          }
+        },
+        {
+          "name": "aa3_2A",
+          "kind": "AA",
+          "round": 3,
+          "side": "A",
+          "target": "direct",
+          "requests": 8000,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.038667,
+            "p50": 0.190209,
+            "p90": 0.6190381000000001,
+            "p95": 1.025145799999998,
+            "p99": 3.03100191,
+            "p999": 8.89903829100007,
+            "max": 14.053083,
+            "avg": 0.348547661249999
+          }
+        },
+        {
+          "name": "aa3_3B",
+          "kind": "AA",
+          "round": 3,
+          "side": "B",
+          "target": "direct",
+          "requests": 7629,
+          "error_rate": 0,
+          "dropped_iterations": 372,
+          "latency_ms": {
+            "min": 0.03875,
+            "p50": 0.215833,
+            "p90": 2.2687666000000015,
+            "p95": 26.887707999999986,
+            "p99": 240.07053199999973,
+            "p999": 413.38274937200237,
+            "max": 454.067833,
+            "avg": 7.718665310656703
+          }
+        },
+        {
+          "name": "ab4_0A",
+          "kind": "AB",
+          "round": 4,
+          "side": "A",
+          "target": "direct",
+          "requests": 8001,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.037917,
+            "p50": 0.193375,
+            "p90": 0.505,
+            "p95": 0.866375,
+            "p99": 2.677375,
+            "p999": 10.445333000000439,
+            "max": 14.856084,
+            "avg": 0.33298933970753675
+          }
+        },
+        {
+          "name": "ab4_1B",
+          "kind": "AB",
+          "round": 4,
+          "side": "B",
+          "target": "gateway",
+          "requests": 8001,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.113375,
+            "p50": 0.313875,
+            "p90": 0.789875,
+            "p95": 1.163459,
+            "p99": 3.248416,
+            "p999": 8.820542000000033,
+            "max": 9.230167,
+            "avg": 0.4645589492563429
+          }
+        },
+        {
+          "name": "ab4_2B",
+          "kind": "AB",
+          "round": 4,
+          "side": "B",
+          "target": "gateway",
+          "requests": 8001,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.094667,
+            "p50": 0.321917,
+            "p90": 1.061166,
+            "p95": 2.587083,
+            "p99": 12.249209,
+            "p999": 47.424875000003254,
+            "max": 63.445041,
+            "avg": 0.8609157664041961
+          }
+        },
+        {
+          "name": "ab4_3A",
+          "kind": "AB",
+          "round": 4,
+          "side": "A",
+          "target": "direct",
+          "requests": 8001,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.038875,
+            "p50": 0.217,
+            "p90": 0.486208,
+            "p95": 0.847875,
+            "p99": 2.49125,
+            "p999": 18.371167000015625,
+            "max": 56.843,
+            "avg": 0.3691215963004617
+          }
+        },
+        {
+          "name": "aa4_0A",
+          "kind": "AA",
+          "round": 4,
+          "side": "A",
+          "target": "direct",
+          "requests": 8000,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.046,
+            "p50": 0.2292085,
+            "p90": 0.7660330000000003,
+            "p95": 1.3765086499999994,
+            "p99": 5.446219999999999,
+            "p999": 21.431074000003516,
+            "max": 79.704209,
+            "avg": 0.5320996751249997
+          }
+        },
+        {
+          "name": "aa4_1B",
+          "kind": "AA",
+          "round": 4,
+          "side": "B",
+          "target": "direct",
+          "requests": 8001,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.024541,
+            "p50": 0.236333,
+            "p90": 0.649,
+            "p95": 1.075917,
+            "p99": 2.649833,
+            "p999": 7.5950000000011295,
+            "max": 16.279875,
+            "avg": 0.36455898512685964
+          }
+        },
+        {
+          "name": "aa4_2B",
+          "kind": "AA",
+          "round": 4,
+          "side": "B",
+          "target": "direct",
+          "requests": 7997,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.039875,
+            "p50": 0.244542,
+            "p90": 0.43020840000000005,
+            "p95": 0.6125412,
+            "p99": 1.522276359999999,
+            "p999": 3.8607328360001247,
+            "max": 9.918667,
+            "avg": 0.28644026559959984
+          }
+        },
+        {
+          "name": "aa4_3A",
+          "kind": "AA",
+          "round": 4,
+          "side": "A",
+          "target": "direct",
+          "requests": 8001,
+          "error_rate": 0,
+          "dropped_iterations": 0,
+          "latency_ms": {
+            "min": 0.04175,
+            "p50": 0.240125,
+            "p90": 0.556459,
+            "p95": 0.885542,
+            "p99": 2.278042,
+            "p999": 4.898708000000036,
+            "max": 7.9265,
+            "avg": 0.3336918007749034
+          }
+        }
+      ]
+    }
+  },
+  "machine": {
+    "timestamp_utc": "2026-11-16T16:20:41Z",
+    "host": {
+      "os": "Darwin 25.6.0 arm64",
+      "macos": "26.6.2",
+      "cpu_model": "Apple M3",
+      "cpu_cores_logical": 8,
+      "ram_bytes": 17179869184
+    },
+    "docker": {
+      "client_version": "28.3.2",
+      "server_version": "28.3.2",
+      "operating_system": "Docker Desktop",
+      "kernel": "6.10.14-linuxkit",
+      "vm_cpus_limit": 8,
+      "vm_memory_bytes_limit": 8218316800,
+      "storage_driver": "overlay2"
+    },
+    "go_version": "go version go1.27.4 darwin/arm64",
+    "k6_image": "grafana/k6:2.4.0",
+    "k6": "k6 v2.4.0 (commit/dd9395906d, go1.27.3, linux/arm64)"
+  },
+  "sections": {
+    "bench": {
+      "part": "all",
+      "timestamp_utc": "2026-11-16T16:59:13Z",
+      "run_start_epoch": 1794846044,
+      "run_end_epoch": 1794848349,
+      "complete": true,
+      "failed": [],
+      "smoke": false,
+      "caffeinated": true,
+      "knobs": {
+        "RATE": {
+          "value": null,
+          "default": null
+        },
+        "DURATION": {
+          "value": null,
+          "default": "8"
+        },
+        "WARMUP": {
+          "value": null,
+          "default": "5"
+        },
+        "ROUNDS": {
+          "value": null,
+          "default": "5"
+        },
+        "AA": {
+          "value": null,
+          "default": "1"
+        },
+        "STEPS": {
+          "value": null,
+          "default": "2000,4000,6000,8000,10000,12000,14000,16000"
+        },
+        "STEP_DURATION": {
+          "value": null,
+          "default": "8"
+        },
+        "RAMP": {
+          "value": null,
+          "default": "1"
+        },
+        "REPS": {
+          "value": null,
+          "default": "3"
+        },
+        "TARGETS": {
+          "value": null,
+          "default": "direct gateway gateway3"
+        },
+        "SETTLE": {
+          "value": null,
+          "default": "8"
+        },
+        "P99_MS": {
+          "value": null,
+          "default": "50"
+        },
+        "LIMITER_DURATION": {
+          "value": null,
+          "default": "15"
+        },
+        "OVER": {
+          "value": null,
+          "default": "2"
+        },
+        "NOISY": {
+          "value": null,
+          "default": "4"
+        },
+        "CHANGES": {
+          "value": null,
+          "default": "100"
+        },
+        "SLOW_RATE": {
+          "value": null,
+          "default": "100"
+        },
+        "PERIOD": {
+          "value": null,
+          "default": "0.5"
+        },
+        "ROLLBACK_EVERY": {
+          "value": null,
+          "default": "10"
+        },
+        "PRE": {
+          "value": null,
+          "default": "4"
+        },
+        "REC": {
+          "value": null,
+          "default": "15"
+        },
+        "REPEATS": {
+          "value": null,
+          "default": "3"
+        },
+        "FAULT": {
+          "value": null,
+          "default": null
+        },
+        "FAULT_MIN": {
+          "value": null,
+          "default": "13"
+        },
+        "FAULT_MAX": {
+          "value": null,
+          "default": "27"
+        },
+        "CONFIGS": {
+          "value": null,
+          "default": "passive active consul"
+        },
+        "MODES": {
+          "value": null,
+          "default": "kill fail500"
+        },
+        "SKIP_ACCESS_LOG": {
+          "value": null,
+          "default": "0"
+        }
+      },
+      "pinning": {
+        "vm_cpus": 8,
+        "k6_cpuset": "0-2",
+        "gateway_cpuset": "3-5",
+        "rest_cpuset": "6-7",
+        "demo_gomaxprocs": "2"
+      },
+      "rig": {
+        "warnings": [
+          "host swap is 87% used (4431 of 5120 MB): expect VM stalls; close memory-heavy apps",
+          "free memory is low (172 MB free of 17180 MB; 4908 MB inactive)",
+          "running on Battery Power, not AC power: CPU may throttle"
+        ],
+        "swap_raw": "total = 5120.00M  used = 4431.12M  free = 688.88M  (encrypted)",
+        "swap_total_mb": 5120.0,
+        "swap_used_mb": 4431.12,
+        "swap_used_pct": 86.5453125,
+        "free_memory_mb": 172.261376,
+        "inactive_memory_mb": 4908.138496,
+        "ram_mb": 17179.869184,
+        "power_source": "Battery Power",
+        "sleep_wake_events": [],
+        "valid": true,
+        "window_utc": [
+          "2026-11-16T16:20:44+00:00",
+          "2026-11-16T16:59:09+00:00"
+        ]
+      },
+      "maxrps_plans": {
+        "main": {
+          "seed": "8329530",
+          "reps": 3,
+          "order": [
+            [
+              "direct",
+              "gateway",
+              "gateway3"
+            ],
+            [
+              "gateway3",
+              "direct",
+              "gateway"
+            ],
+            [
+              "direct",
+              "gateway3",
+              "gateway"
+            ]
+          ]
+        }
+      },
+      "raw_dir": "/Users/amitkhanal/repos/tollgate/bench/results/raw/20261116T162040Z",
+      "provenance": [
+        {
+          "section": "bench",
+          "label": "bench",
+          "time_utc": "2026-11-16T16:21:00Z",
+          "git_head": "b80a38349c90aa68561f226833cf531513a93241",
+          "git_dirty": false,
+          "images": {
+            "gateway": "sha256:4c38db6a498fc00a12176944fbddde68e2520b5d65e93e5b55339222e4f1e549",
+            "controlplane": "sha256:92bbbc8270683bd447deb3a7a4bb64f0558f53bc26b49a4d602bd46b117f4d65",
+            "demo": "sha256:e40818f9cdd740241638f0804997b9e954060c4b4094c8794cbba79c5b019b95"
+          }
+        },
+        {
+          "section": "bench",
+          "label": "accesslog",
+          "time_utc": "2026-11-16T16:41:18Z",
+          "git_head": "b80a38349c90aa68561f226833cf531513a93241",
+          "git_dirty": false,
+          "images": {
+            "gateway": "sha256:4c38db6a498fc00a12176944fbddde68e2520b5d65e93e5b55339222e4f1e549",
+            "controlplane": "sha256:92bbbc8270683bd447deb3a7a4bb64f0558f53bc26b49a4d602bd46b117f4d65",
+            "demo": "sha256:e40818f9cdd740241638f0804997b9e954060c4b4094c8794cbba79c5b019b95"
+          }
+        }
+      ],
+      "part_run": "all"
+    },
+    "chaos": {
+      "part": "all",
+      "timestamp_utc": "2026-11-16T16:59:13Z",
+      "run_start_epoch": 1794846044,
+      "run_end_epoch": 1794848349,
+      "complete": true,
+      "failed": [],
+      "smoke": false,
+      "caffeinated": true,
+      "knobs": {
+        "RATE": {
+          "value": null,
+          "default": null
+        },
+        "DURATION": {
+          "value": null,
+          "default": "8"
+        },
+        "WARMUP": {
+          "value": null,
+          "default": "5"
+        },
+        "ROUNDS": {
+          "value": null,
+          "default": "5"
+        },
+        "AA": {
+          "value": null,
+          "default": "1"
+        },
+        "STEPS": {
+          "value": null,
+          "default": "2000,4000,6000,8000,10000,12000,14000,16000"
+        },
+        "STEP_DURATION": {
+          "value": null,
+          "default": "8"
+        },
+        "RAMP": {
+          "value": null,
+          "default": "1"
+        },
+        "REPS": {
+          "value": null,
+          "default": "3"
+        },
+        "TARGETS": {
+          "value": null,
+          "default": "direct gateway gateway3"
+        },
+        "SETTLE": {
+          "value": null,
+          "default": "8"
+        },
+        "P99_MS": {
+          "value": null,
+          "default": "50"
+        },
+        "LIMITER_DURATION": {
+          "value": null,
+          "default": "15"
+        },
+        "OVER": {
+          "value": null,
+          "default": "2"
+        },
+        "NOISY": {
+          "value": null,
+          "default": "4"
+        },
+        "CHANGES": {
+          "value": null,
+          "default": "100"
+        },
+        "SLOW_RATE": {
+          "value": null,
+          "default": "100"
+        },
+        "PERIOD": {
+          "value": null,
+          "default": "0.5"
+        },
+        "ROLLBACK_EVERY": {
+          "value": null,
+          "default": "10"
+        },
+        "PRE": {
+          "value": null,
+          "default": "4"
+        },
+        "REC": {
+          "value": null,
+          "default": "15"
+        },
+        "REPEATS": {
+          "value": null,
+          "default": "3"
+        },
+        "FAULT": {
+          "value": null,
+          "default": null
+        },
+        "FAULT_MIN": {
+          "value": null,
+          "default": "13"
+        },
+        "FAULT_MAX": {
+          "value": null,
+          "default": "27"
+        },
+        "CONFIGS": {
+          "value": null,
+          "default": "passive active consul"
+        },
+        "MODES": {
+          "value": null,
+          "default": "kill fail500"
+        },
+        "SKIP_ACCESS_LOG": {
+          "value": null,
+          "default": "0"
+        }
+      },
+      "pinning": {
+        "vm_cpus": 8,
+        "k6_cpuset": "0-2",
+        "gateway_cpuset": "3-5",
+        "rest_cpuset": "6-7",
+        "demo_gomaxprocs": "2"
+      },
+      "rig": {
+        "warnings": [
+          "host swap is 87% used (4431 of 5120 MB): expect VM stalls; close memory-heavy apps",
+          "free memory is low (172 MB free of 17180 MB; 4908 MB inactive)",
+          "running on Battery Power, not AC power: CPU may throttle"
+        ],
+        "swap_raw": "total = 5120.00M  used = 4431.12M  free = 688.88M  (encrypted)",
+        "swap_total_mb": 5120.0,
+        "swap_used_mb": 4431.12,
+        "swap_used_pct": 86.5453125,
+        "free_memory_mb": 172.261376,
+        "inactive_memory_mb": 4908.138496,
+        "ram_mb": 17179.869184,
+        "power_source": "Battery Power",
+        "sleep_wake_events": [],
+        "valid": true,
+        "window_utc": [
+          "2026-11-16T16:20:44+00:00",
+          "2026-11-16T16:59:09+00:00"
+        ]
+      },
+      "maxrps_plans": {
+        "main": {
+          "seed": "8329530",
+          "reps": 3,
+          "order": [
+            [
+              "direct",
+              "gateway",
+              "gateway3"
+            ],
+            [
+              "gateway3",
+              "direct",
+              "gateway"
+            ],
+            [
+              "direct",
+              "gateway3",
+              "gateway"
+            ]
+          ]
+        }
+      },
+      "raw_dir": "/Users/amitkhanal/repos/tollgate/bench/results/raw/20261116T162040Z",
+      "provenance": [
+        {
+          "section": "chaos",
+          "label": "chaos",
+          "time_utc": "2026-11-16T16:44:55Z",
+          "git_head": "b80a38349c90aa68561f226833cf531513a93241",
+          "git_dirty": false,
+          "images": {
+            "gateway": "sha256:4c38db6a498fc00a12176944fbddde68e2520b5d65e93e5b55339222e4f1e549",
+            "controlplane": "sha256:92bbbc8270683bd447deb3a7a4bb64f0558f53bc26b49a4d602bd46b117f4d65",
+            "demo": "sha256:24fa27e7af4ab00b1d67d1308501bb2fbedce1c68a6d45df2f91a2bba05da586"
+          }
+        }
+      ],
+      "part_run": "all"
+    }
+  },
+  "timestamp_utc": "2026-11-16T16:59:13Z",
+  "generated_by": "all",
+  "smoke": false,
+  "knobs": {
+    "RATE": {
+      "value": null,
+      "default": null
+    },
+    "DURATION": {
+      "value": null,
+      "default": "8"
+    },
+    "WARMUP": {
+      "value": null,
+      "default": "5"
+    },
+    "ROUNDS": {
+      "value": null,
+      "default": "5"
+    },
+    "AA": {
+      "value": null,
+      "default": "1"
+    },
+    "STEPS": {
+      "value": null,
+      "default": "2000,4000,6000,8000,10000,12000,14000,16000"
+    },
+    "STEP_DURATION": {
+      "value": null,
+      "default": "8"
+    },
+    "RAMP": {
+      "value": null,
+      "default": "1"
+    },
+    "REPS": {
+      "value": null,
+      "default": "3"
+    },
+    "TARGETS": {
+      "value": null,
+      "default": "direct gateway gateway3"
+    },
+    "SETTLE": {
+      "value": null,
+      "default": "8"
+    },
+    "P99_MS": {
+      "value": null,
+      "default": "50"
+    },
+    "LIMITER_DURATION": {
+      "value": null,
+      "default": "15"
+    },
+    "OVER": {
+      "value": null,
+      "default": "2"
+    },
+    "NOISY": {
+      "value": null,
+      "default": "4"
+    },
+    "CHANGES": {
+      "value": null,
+      "default": "100"
+    },
+    "SLOW_RATE": {
+      "value": null,
+      "default": "100"
+    },
+    "PERIOD": {
+      "value": null,
+      "default": "0.5"
+    },
+    "ROLLBACK_EVERY": {
+      "value": null,
+      "default": "10"
+    },
+    "PRE": {
+      "value": null,
+      "default": "4"
+    },
+    "REC": {
+      "value": null,
+      "default": "15"
+    },
+    "REPEATS": {
+      "value": null,
+      "default": "3"
+    },
+    "FAULT": {
+      "value": null,
+      "default": null
+    },
+    "FAULT_MIN": {
+      "value": null,
+      "default": "13"
+    },
+    "FAULT_MAX": {
+      "value": null,
+      "default": "27"
+    },
+    "CONFIGS": {
+      "value": null,
+      "default": "passive active consul"
+    },
+    "MODES": {
+      "value": null,
+      "default": "kill fail500"
+    },
+    "SKIP_ACCESS_LOG": {
+      "value": null,
+      "default": "0"
+    }
+  },
+  "provenance": {
+    "git_head": "b80a38349c90aa68561f226833cf531513a93241",
+    "git_dirty": false,
+    "images": {
+      "gateway": "sha256:4c38db6a498fc00a12176944fbddde68e2520b5d65e93e5b55339222e4f1e549",
+      "controlplane": "sha256:92bbbc8270683bd447deb3a7a4bb64f0558f53bc26b49a4d602bd46b117f4d65",
+      "demo": null
+    },
+    "image_ids": {
+      "gateway": [
+        "sha256:4c38db6a498fc00a12176944fbddde68e2520b5d65e93e5b55339222e4f1e549"
+      ],
+      "controlplane": [
+        "sha256:92bbbc8270683bd447deb3a7a4bb64f0558f53bc26b49a4d602bd46b117f4d65"
+      ],
+      "demo": [
+        "sha256:24fa27e7af4ab00b1d67d1308501bb2fbedce1c68a6d45df2f91a2bba05da586",
+        "sha256:e40818f9cdd740241638f0804997b9e954060c4b4094c8794cbba79c5b019b95"
+      ]
+    },
+    "image_content_sha256": {
+      "gateway": null,
+      "controlplane": null,
+      "demo": "fe1804c12463b9e10dd31b1be581410dac7ca3388b961355c6329e790fe58dc5"
+    },
+    "image_identity_notes": [
+      {
+        "image": "demo",
+        "ids": [
+          "sha256:24fa27e7af4ab00b1d67d1308501bb2fbedce1c68a6d45df2f91a2bba05da586",
+          "sha256:e40818f9cdd740241638f0804997b9e954060c4b4094c8794cbba79c5b019b95"
+        ],
+        "layers_sha256": "fe1804c12463b9e10dd31b1be581410dac7ca3388b961355c6329e790fe58dc5",
+        "layer_count": 13,
+        "created": "2026-11-16T11:43:31.155056136Z",
+        "architecture": "arm64",
+        "os": "linux",
+        "method": "verified at merge time by inspecting local images (docker image inspect): identical RootFS layers",
+        "time_utc": "2026-11-16T17:03:10Z",
+        "labels": {
+          "sha256:e40818f9cdd740241638f0804997b9e954060c4b4094c8794cbba79c5b019b95": [
+            "accesslog",
+            "bench"
+          ],
+          "sha256:24fa27e7af4ab00b1d67d1308501bb2fbedce1c68a6d45df2f91a2bba05da586": [
+            "chaos"
+          ]
+        }
+      }
+    ],
+    "records": [
+      {
+        "section": "bench",
+        "label": "bench",
+        "time_utc": "2026-11-16T16:21:00Z",
+        "git_head": "b80a38349c90aa68561f226833cf531513a93241",
+        "git_dirty": false,
+        "images": {
+          "gateway": "sha256:4c38db6a498fc00a12176944fbddde68e2520b5d65e93e5b55339222e4f1e549",
+          "controlplane": "sha256:92bbbc8270683bd447deb3a7a4bb64f0558f53bc26b49a4d602bd46b117f4d65",
+          "demo": "sha256:e40818f9cdd740241638f0804997b9e954060c4b4094c8794cbba79c5b019b95"
+        }
+      },
+      {
+        "section": "bench",
+        "label": "accesslog",
+        "time_utc": "2026-11-16T16:41:18Z",
+        "git_head": "b80a38349c90aa68561f226833cf531513a93241",
+        "git_dirty": false,
+        "images": {
+          "gateway": "sha256:4c38db6a498fc00a12176944fbddde68e2520b5d65e93e5b55339222e4f1e549",
+          "controlplane": "sha256:92bbbc8270683bd447deb3a7a4bb64f0558f53bc26b49a4d602bd46b117f4d65",
+          "demo": "sha256:e40818f9cdd740241638f0804997b9e954060c4b4094c8794cbba79c5b019b95"
+        }
+      },
+      {
+        "section": "chaos",
+        "label": "chaos",
+        "time_utc": "2026-11-16T16:44:55Z",
+        "git_head": "b80a38349c90aa68561f226833cf531513a93241",
+        "git_dirty": false,
+        "images": {
+          "gateway": "sha256:4c38db6a498fc00a12176944fbddde68e2520b5d65e93e5b55339222e4f1e549",
+          "controlplane": "sha256:92bbbc8270683bd447deb3a7a4bb64f0558f53bc26b49a4d602bd46b117f4d65",
+          "demo": "sha256:24fa27e7af4ab00b1d67d1308501bb2fbedce1c68a6d45df2f91a2bba05da586"
+        }
+      }
+    ]
+  },
+  "complete_blockers": [],
+  "complete": true
+}
